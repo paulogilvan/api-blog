@@ -2,10 +2,23 @@ import type { RequestHandler } from 'express';
 import { getAuthenticatedUser } from '../middlewares/ensure-authenticated.ts';
 import {
   createPostSchema,
+  listPostsQuerySchema,
   postIdParamsSchema,
   updatePostSchema,
 } from '../schemas/post.schema.ts';
 import * as postService from '../services/post.service.ts';
+
+export const listPostsController: RequestHandler = async (req, res) => {
+  const { page } = listPostsQuerySchema.parse(req.query);
+  const result = await postService.listPosts(page);
+  res.status(200).json(result);
+};
+
+export const getPostController: RequestHandler = async (req, res) => {
+  const { id } = postIdParamsSchema.parse(req.params);
+  const result = await postService.getPostById(id);
+  res.status(200).json(result);
+};
 
 export const createPostController: RequestHandler = async (req, res) => {
   const user = getAuthenticatedUser(req);
