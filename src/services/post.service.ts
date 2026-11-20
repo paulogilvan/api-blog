@@ -1,8 +1,10 @@
-import { eq } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import { db } from '../db/index.ts';
-import { posts } from '../db/schema.ts';
+import { posts, users } from '../db/schema.ts';
 import { AppError } from '../errors/app-error.ts';
 import type { CreatePostInput, UpdatePostInput } from '../schemas/post.schema.ts';
+
+export const POSTS_PER_PAGE = 10;
 
 export type PostAuthor = { id: number; name: string };
 
@@ -14,6 +16,11 @@ export type PostResult = {
   author: PostAuthor;
 };
 
+export type PostListResult = {
+  data: PostResult[];
+  meta: { page: number; limit: number; total: number; totalPages: number };
+};
+
 const postColumns = {
   id: posts.id,
   title: posts.title,
@@ -21,7 +28,15 @@ const postColumns = {
   createdAt: posts.createdAt,
 };
 
+// Post + nome do autor (nunca o e-mail), para as rotas públicas.
+const publicPostColumns = {
+  ...postColumns,
+  authorId: users.id,
+  authorName: users.name,
+};
+
 type PostRow = { id: number; title: string; content: string; createdAt: Date };
+type PublicPostRow = PostRow & { authorId: number; authorName: string };
 
 function toPostResult(post: PostRow, author: PostAuthor): PostResult {
   return {
@@ -31,6 +46,10 @@ function toPostResult(post: PostRow, author: PostAuthor): PostResult {
     createdAt: post.createdAt.toISOString(),
     author: { id: author.id, name: author.name },
   };
+}
+
+function toPublicPostResult(row: PublicPostRow): PostResult {
+  return toPostResult(row, { id: row.authorId, name: row.authorName });
 }
 
 const postNotFound = () => new AppError('NOT_FOUND', 'Post not found');
@@ -45,6 +64,46 @@ async function assertOwnership(postId: number, userId: number, forbiddenMessage:
 
   if (!post) throw postNotFound();
   if (post.authorId !== userId) throw new AppError('FORBIDDEN', forbiddenMessage);
+}
+
+export async function listPosts(page: number): Promise<PostListResult> {
+  const limit = POSTS_PER_PAGE;
+  const offset = (page - 1) * limit;
+
+  // Página e contagem no mesmo snapshot: o `total` sempre bate com os dados retornados.
+  const { rows, total } = await db.transaction(
+    async (tx) => {
+      const rows = await tx
+        .select(publicPostColumns)
+        .from(posts)
+        .innerJoin(users, eq(posts.authorId, users.id))
+        // `id` desempata posts com o mesmo createdAt, mantendo a paginação estável.
+        .orderBy(desc(posts.createdAt), desc(posts.id))
+        .limit(limit)
+        .offset(offset);
+      const total = await tx.$count(posts);
+      return { rows, total };
+    },
+    { isolationLevel: 'repeatable read', accessMode: 'read only' },
+  );
+
+  return {
+    data: rows.map(toPublicPostResult),
+    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+  };
+}
+
+export async function getPostById(postId: number): Promise<PostResult> {
+  const [row] = await db
+    .select(publicPostColumns)
+    .from(posts)
+    .innerJoin(users, eq(posts.authorId, users.id))
+    .where(eq(posts.id, postId))
+    .limit(1);
+
+  if (!row) throw postNotFound();
+
+  return toPublicPostResult(row);
 }
 
 export async function createPost(input: CreatePostInput, author: PostAuthor): Promise<PostResult> {
