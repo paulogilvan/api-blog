@@ -1,0 +1,40 @@
+services:
+  db:
+    image: postgres:17
+    container_name: api-blog-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: blog
+    ports:
+      - "6000:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d blog"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  db_test:
+    image: postgres:17
+    container_name: api-blog-db-test
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: blog_test
+    ports:
+      - "6001:5432"
+    volumes:
+      - db_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d blog_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  db_data:
+  db_test_data:
