@@ -83,3 +83,15 @@ export async function login(input: LoginInput): Promise<AuthResult> {
 
   return { token, user: { id: user.id, name: user.name, email: user.email } };
 }
+
+export type AuthenticatedUser = { id: number; name: string; email: string };
+
+export async function findUserByToken(token: string): Promise<AuthenticatedUser | null> {
+  const [user] = await db
+    .select({ id: users.id, name: users.name, email: users.email })
+    .from(users)
+    .where(eq(users.token, token))
+    .limit(1);
+
+  return user ?? null;
+}
