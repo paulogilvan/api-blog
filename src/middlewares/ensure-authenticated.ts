@@ -1,0 +1,34 @@
+import type { Request, RequestHandler } from 'express';
+import { AppError } from '../errors/app-error.ts';
+import * as authService from '../services/auth.service.ts';
+import type { AuthenticatedUser } from '../services/auth.service.ts';
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: AuthenticatedUser;
+    }
+  }
+}
+
+// Tokens de sessão são 32 bytes em hex (64 chars) — qualquer outro formato é rejeitado sem ir ao banco.
+const BEARER_PATTERN = /^Bearer ([a-f0-9]{64})$/i;
+
+const unauthorized = () => new AppError('UNAUTHORIZED', 'Missing or invalid token');
+
+export const ensureAuthenticated: RequestHandler = async (req, _res, next) => {
+  const match = req.headers.authorization?.trim().match(BEARER_PATTERN);
+  if (!match) throw unauthorized();
+
+  const user = await authService.findUserByToken(match[1].toLowerCase());
+  if (!user) throw unauthorized();
+
+  req.user = user;
+  next();
+};
+
+/** Retorna o usuário autenticado; uso exclusivo em rotas protegidas por `ensureAuthenticated`. */
+export function getAuthenticatedUser(req: Request): AuthenticatedUser {
+  if (!req.user) throw unauthorized();
+  return req.user;
+}
