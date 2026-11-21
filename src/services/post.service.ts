@@ -1,147 +1,78 @@
-import { desc, eq } from 'drizzle-orm';
-import { db } from '../db/index.ts';
-import { posts, users } from '../db/schema.ts';
 import { AppError } from '../errors/app-error.ts';
+import type { PostRepository, PostWithAuthorRecord } from '../repositories/post.repository.ts';
 import type { CreatePostInput, UpdatePostInput } from '../schemas/post.schema.ts';
 
 export const POSTS_PER_PAGE = 10;
 
 export type PostAuthor = { id: number; name: string };
 
-export type PostResult = {
-  id: number;
-  title: string;
-  content: string;
-  createdAt: string;
-  author: PostAuthor;
-};
-
-export type PostListResult = {
-  data: PostResult[];
-  meta: { page: number; limit: number; total: number; totalPages: number };
-};
-
-const postColumns = {
-  id: posts.id,
-  title: posts.title,
-  content: posts.content,
-  createdAt: posts.createdAt,
-};
-
-// Post + nome do autor (nunca o e-mail), para as rotas públicas.
-const publicPostColumns = {
-  ...postColumns,
-  authorId: users.id,
-  authorName: users.name,
-};
-
-type PostRow = { id: number; title: string; content: string; createdAt: Date };
-type PublicPostRow = PostRow & { authorId: number; authorName: string };
-
-function toPostResult(post: PostRow, author: PostAuthor): PostResult {
-  return {
-    id: post.id,
-    title: post.title,
-    content: post.content,
-    createdAt: post.createdAt.toISOString(),
-    author: { id: author.id, name: author.name },
-  };
-}
-
-function toPublicPostResult(row: PublicPostRow): PostResult {
-  return toPostResult(row, { id: row.authorId, name: row.authorName });
-}
-
 const postNotFound = () => new AppError('NOT_FOUND', 'Post not found');
 
-/** Garante que o post existe (404) e pertence ao usuário (403). */
-async function assertOwnership(postId: number, userId: number, forbiddenMessage: string) {
-  const [post] = await db
-    .select({ authorId: posts.authorId })
-    .from(posts)
-    .where(eq(posts.id, postId))
-    .limit(1);
+export class PostService {
+  private readonly postRepository: PostRepository;
 
-  if (!post) throw postNotFound();
-  if (post.authorId !== userId) throw new AppError('FORBIDDEN', forbiddenMessage);
-}
+  constructor(postRepository: PostRepository) {
+    this.postRepository = postRepository;
+  }
 
-export async function listPosts(page: number): Promise<PostListResult> {
-  const limit = POSTS_PER_PAGE;
-  const offset = (page - 1) * limit;
+  /** Garante que o post existe (404) e pertence ao usuário (403). */
+  private async assertOwnership(postId: number, userId: number, forbiddenMessage: string) {
+    const authorId = await this.postRepository.findAuthorId(postId);
 
-  // Página e contagem no mesmo snapshot: o `total` sempre bate com os dados retornados.
-  const { rows, total } = await db.transaction(
-    async (tx) => {
-      const rows = await tx
-        .select(publicPostColumns)
-        .from(posts)
-        .innerJoin(users, eq(posts.authorId, users.id))
-        // `id` desempata posts com o mesmo createdAt, mantendo a paginação estável.
-        .orderBy(desc(posts.createdAt), desc(posts.id))
-        .limit(limit)
-        .offset(offset);
-      const total = await tx.$count(posts);
-      return { rows, total };
-    },
-    { isolationLevel: 'repeatable read', accessMode: 'read only' },
-  );
+    if (authorId === null) throw postNotFound();
+    if (authorId !== userId) throw new AppError('FORBIDDEN', forbiddenMessage);
+  }
 
-  return {
-    data: rows.map(toPublicPostResult),
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
-  };
-}
+  async listPosts(
+    page: number,
+  ): Promise<{ posts: PostWithAuthorRecord[]; total: number; limit: number }> {
+    const limit = POSTS_PER_PAGE;
+    const offset = (page - 1) * limit;
 
-export async function getPostById(postId: number): Promise<PostResult> {
-  const [row] = await db
-    .select(publicPostColumns)
-    .from(posts)
-    .innerJoin(users, eq(posts.authorId, users.id))
-    .where(eq(posts.id, postId))
-    .limit(1);
+    const { rows, total } = await this.postRepository.findMany({ limit, offset });
 
-  if (!row) throw postNotFound();
+    return { posts: rows, total, limit };
+  }
 
-  return toPublicPostResult(row);
-}
+  async getPostById(postId: number): Promise<PostWithAuthorRecord> {
+    const post = await this.postRepository.findById(postId);
 
-export async function createPost(input: CreatePostInput, author: PostAuthor): Promise<PostResult> {
-  const [post] = await db
-    .insert(posts)
-    .values({ title: input.title, content: input.content, authorId: author.id })
-    .returning(postColumns);
+    if (!post) throw postNotFound();
 
-  return toPostResult(post, author);
-}
+    return post;
+  }
 
-export async function updatePost(
-  postId: number,
-  input: UpdatePostInput,
-  user: PostAuthor,
-): Promise<PostResult> {
-  await assertOwnership(postId, user.id, 'You can only update your own posts');
+  async createPost(input: CreatePostInput, author: PostAuthor): Promise<PostWithAuthorRecord> {
+    const post = await this.postRepository.create({
+      title: input.title,
+      content: input.content,
+      authorId: author.id,
+    });
 
-  const [post] = await db
-    .update(posts)
-    .set({
-      ...(input.title !== undefined ? { title: input.title } : {}),
-      ...(input.content !== undefined ? { content: input.content } : {}),
-    })
-    .where(eq(posts.id, postId))
-    .returning(postColumns);
+    return { ...post, author: { id: author.id, name: author.name } };
+  }
 
-  // Post apagado entre a checagem e o update.
-  if (!post) throw postNotFound();
+  async updatePost(
+    postId: number,
+    input: UpdatePostInput,
+    user: PostAuthor,
+  ): Promise<PostWithAuthorRecord> {
+    await this.assertOwnership(postId, user.id, 'You can only update your own posts');
 
-  // O dono do post é o próprio usuário autenticado.
-  return toPostResult(post, user);
-}
+    const post = await this.postRepository.update(postId, input);
 
-export async function deletePost(postId: number, userId: number): Promise<void> {
-  await assertOwnership(postId, userId, 'You can only delete your own posts');
+    // Post apagado entre a checagem e o update.
+    if (!post) throw postNotFound();
 
-  const deleted = await db.delete(posts).where(eq(posts.id, postId)).returning({ id: posts.id });
+    // O dono do post é o próprio usuário autenticado.
+    return { ...post, author: { id: user.id, name: user.name } };
+  }
 
-  if (deleted.length === 0) throw postNotFound();
+  async deletePost(postId: number, userId: number): Promise<void> {
+    await this.assertOwnership(postId, userId, 'You can only delete your own posts');
+
+    const deleted = await this.postRepository.delete(postId);
+
+    if (!deleted) throw postNotFound();
+  }
 }
