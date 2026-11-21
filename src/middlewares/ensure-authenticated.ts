@@ -1,7 +1,9 @@
 import type { Request, RequestHandler } from 'express';
 import { AppError } from '../errors/app-error.ts';
-import * as authService from '../services/auth.service.ts';
-import type { AuthenticatedUser } from '../services/auth.service.ts';
+import { DrizzleUserRepository } from '../repositories/drizzle-user.repository.ts';
+import { AuthService, type AuthenticatedUser } from '../services/auth.service.ts';
+
+const authService = new AuthService(new DrizzleUserRepository());
 
 declare global {
   namespace Express {

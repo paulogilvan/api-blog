@@ -59,6 +59,7 @@ describe('POST /api/auth/login', () => {
       const response = await request(app).post(route).send(credentials);
 
       expect(response.body.user).not.toHaveProperty('password');
+      expect(response.body.user).not.toHaveProperty('passwordHash');
       expect(JSON.stringify(response.body)).not.toContain(registeredUser.password);
       expect(JSON.stringify(response.body)).not.toContain('$2b$');
     });
