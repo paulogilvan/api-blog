@@ -186,23 +186,39 @@ O campo `details` só aparece em erros de validação.
 Cada requisição passa pelas mesmas camadas:
 
 ```
-Route → (ensureAuthenticated) → Controller → Service → Drizzle / PostgreSQL
-                                     ↑
-                                Zod (input)
+Route → (ensureAuthenticated) → Controller → Service → Repository (interface)
+                                     ↑                        ↑ implementa
+                                Zod (input)          Drizzle*Repository → PostgreSQL
 ```
 
-- **Controller:** valida `body`, `params` e `query` com Zod, chama o service e devolve o status HTTP.
-- **Service:** concentra as regras de negócio (hash de senha, token, posse do post, paginação). Não conhece Express.
+Cada camada tem uma responsabilidade só (SRP):
+
+- **Controller:** cuida do HTTP. Valida `body`, `params` e `query` com Zod, chama o service e **monta o corpo da resposta**: escolhe os campos expostos, converte datas para ISO e monta o envelope `{ data, meta }` da listagem.
+- **Service:** concentra as regras de negócio (hash de senha, token, posse do post, paginação, erros 401/403/404/409). Devolve dados de domínio e não conhece Express nem o ORM.
+- **Repository:** é a interface de persistência que o service usa (`PostRepository`, `UserRepository`).
+- **Adapter Drizzle:** implementa o repository com Drizzle (`DrizzlePostRepository`, `DrizzleUserRepository`). Detalhes do banco, como o código `23505` de violação de unicidade do Postgres, ficam só aqui.
 - **Middleware `ensureAuthenticated`:** resolve o usuário a partir do token antes do controller.
 - **Error handler:** converte `ZodError` e `AppError` no formato de erro padrão e esconde detalhes de erros inesperados.
+
+### Inversão de dependência (DIP)
+
+Os services são classes que recebem o repository pelo construtor e dependem só da interface, nunca do Drizzle. O controller monta essas peças, ligando cada service ao adapter concreto:
+
+```ts
+// src/controllers/post.controller.ts
+const postService = new PostService(new DrizzlePostRepository());
+```
+
+Para trocar o ORM ou usar um repository em memória nos testes, basta outra classe que implemente a mesma interface. O service não muda.
 
 ```
 src/
 ├── app.ts               # montagem do Express
 ├── server.ts            # inicialização e encerramento gracioso
 ├── env.ts               # validação das variáveis de ambiente
-├── controllers/
-├── services/
+├── controllers/         # HTTP: entrada, montagem da resposta e status
+├── services/            # regras de negócio (classes com injeção do repository)
+├── repositories/        # interfaces de persistência + adapters Drizzle
 ├── schemas/             # schemas Zod de entrada
 ├── routes/
 ├── middlewares/         # autenticação e tratamento de erros
