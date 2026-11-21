@@ -186,39 +186,51 @@ O campo `details` só aparece em erros de validação.
 Cada requisição passa pelas mesmas camadas:
 
 ```
-Route → (ensureAuthenticated) → Controller → Service → Repository (interface)
-                                     ↑                        ↑ implementa
-                                Zod (input)          Drizzle*Repository → PostgreSQL
+Route → (ensureAuthenticated) → Controller → Use Case → Repository / Utils (interfaces)
+                                     ↑                              ↑ implementam
+                                Zod (input)        Drizzle*Repository → PostgreSQL
+                                                   BcryptPasswordHasher, CryptoTokenGenerator
 ```
 
 Cada camada tem uma responsabilidade só (SRP):
 
-- **Controller:** cuida do HTTP. Valida `body`, `params` e `query` com Zod, chama o service e **monta o corpo da resposta**: escolhe os campos expostos, converte datas para ISO e monta o envelope `{ data, meta }` da listagem.
-- **Service:** concentra as regras de negócio (hash de senha, token, posse do post, paginação, erros 401/403/404/409). Devolve dados de domínio e não conhece Express nem o ORM.
-- **Repository:** é a interface de persistência que o service usa (`PostRepository`, `UserRepository`).
+- **Controller:** cuida do HTTP. Valida `body`, `params` e `query` com Zod, chama o use case e **delega a montagem do corpo da resposta** aos mappers de DTO de saída.
+- **DTOs de saída:** descrevem o JSON da API em `src/dtos/`: `PostOutputDTO` e `PostListOutputDTO` (posts) e `AuthOutputDTO` (cadastro e login). Os mappers (`toPostOutputDTO`, `toPostListOutputDTO`, `toAuthOutputDTO`) são funções puras que escolhem os campos expostos (o hash da senha nunca sai), convertem datas para ISO e montam o envelope `{ data, meta }` da listagem.
+- **Use cases:** cada operação é uma classe própria que implementa a interface `UseCase<Input, Output>`, com um único método `execute`. Posts: `ListPostsUseCase`, `GetPostUseCase`, `CreatePostUseCase`, `UpdatePostUseCase` e `DeletePostUseCase`. Auth: `RegisterUseCase`, `LoginUseCase` e `FindUserByTokenUseCase`. Concentram as regras de negócio (posse do post, paginação, cadastro e login, erros 401/403/404/409), devolvem dados de domínio e não conhecem Express, ORM nem bibliotecas de criptografia.
+- **Repository:** é a interface de persistência que os use cases usam (`PostRepository`, `UserRepository`).
 - **Adapter Drizzle:** implementa o repository com Drizzle (`DrizzlePostRepository`, `DrizzleUserRepository`). Detalhes do banco, como o código `23505` de violação de unicidade do Postgres, ficam só aqui.
+- **Utils:** interfaces de funções auxiliares usadas pelos use cases de auth (`PasswordHasher`, `TokenGenerator`) e seus adapters (`BcryptPasswordHasher`, `CryptoTokenGenerator`). O custo do bcrypt e o hash fictício que protege o login contra timing attack ficam no adapter.
 - **Middleware `ensureAuthenticated`:** resolve o usuário a partir do token antes do controller.
 - **Error handler:** converte `ZodError` e `AppError` no formato de erro padrão e esconde detalhes de erros inesperados.
 
 ### Inversão de dependência (DIP)
 
-Os services são classes que recebem o repository pelo construtor e dependem só da interface, nunca do Drizzle. O controller monta essas peças, ligando cada service ao adapter concreto:
+Os use cases recebem repositories e utils pelo construtor e dependem só das interfaces, nunca do Drizzle, do bcrypt ou do `node:crypto`. O controller é o ponto de composição: instancia as implementações concretas uma única vez, no topo do módulo (fora dos handlers), e os handlers só enxergam a abstração `UseCase`:
 
 ```ts
 // src/controllers/post.controller.ts
-const postService = new PostService(new DrizzlePostRepository());
+const postRepository: PostRepository = new DrizzlePostRepository();
+const getPost: UseCase<GetPostInput, PostWithAuthorRecord> = new GetPostUseCase(postRepository);
+
+export const getPostController: RequestHandler = async (req, res) => {
+  const { id } = postIdParamsSchema.parse(req.params);
+  const post = await getPost.execute({ postId: id });
+  res.status(200).json(toPostOutputDTO(post));
+};
 ```
 
-Para trocar o ORM ou usar um repository em memória nos testes, basta outra classe que implemente a mesma interface. O service não muda.
+Para trocar o ORM ou usar um repository em memória nos testes, basta outra classe que implemente a mesma interface. Os use cases não mudam.
 
 ```
 src/
 ├── app.ts               # montagem do Express
 ├── server.ts            # inicialização e encerramento gracioso
 ├── env.ts               # validação das variáveis de ambiente
-├── controllers/         # HTTP: entrada, montagem da resposta e status
-├── services/            # regras de negócio (classes com injeção do repository)
+├── controllers/         # HTTP: entrada, status e chamada aos use cases
+├── dtos/                # DTOs de saída + mappers (formato do JSON da API)
+├── use-cases/           # regras de negócio, um use case por operação (posts/, auth/)
 ├── repositories/        # interfaces de persistência + adapters Drizzle
+├── utils/               # interfaces de hash de senha e token + adapters
 ├── schemas/             # schemas Zod de entrada
 ├── routes/
 ├── middlewares/         # autenticação e tratamento de erros
