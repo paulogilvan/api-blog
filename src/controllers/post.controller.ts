@@ -1,4 +1,5 @@
 import type { RequestHandler } from 'express';
+import { toPostListOutputDTO, toPostOutputDTO } from '../dtos/post-output.dto.ts';
 import { getAuthenticatedUser } from '../middlewares/ensure-authenticated.ts';
 import { DrizzlePostRepository } from '../repositories/drizzle-post.repository.ts';
 import type { PostRepository, PostWithAuthorRecord } from '../repositories/post.repository.ts';
@@ -39,44 +40,23 @@ const updatePost: UseCase<UpdatePostUseCaseInput, PostWithAuthorRecord> = new Up
 );
 const deletePost: UseCase<DeletePostInput, void> = new DeletePostUseCase(postRepository);
 
-type PostResponse = {
-  id: number;
-  title: string;
-  content: string;
-  createdAt: string;
-  author: { id: number; name: string };
-};
-
-function toPostResponse(post: PostWithAuthorRecord): PostResponse {
-  return {
-    id: post.id,
-    title: post.title,
-    content: post.content,
-    createdAt: post.createdAt.toISOString(),
-    author: { id: post.author.id, name: post.author.name },
-  };
-}
-
 export const listPostsController: RequestHandler = async (req, res) => {
   const { page } = listPostsQuerySchema.parse(req.query);
-  const { posts, total, limit } = await listPosts.execute({ page });
-  res.status(200).json({
-    data: posts.map(toPostResponse),
-    meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
-  });
+  const result = await listPosts.execute({ page });
+  res.status(200).json(toPostListOutputDTO(result, page));
 };
 
 export const getPostController: RequestHandler = async (req, res) => {
   const { id } = postIdParamsSchema.parse(req.params);
   const post = await getPost.execute({ postId: id });
-  res.status(200).json(toPostResponse(post));
+  res.status(200).json(toPostOutputDTO(post));
 };
 
 export const createPostController: RequestHandler = async (req, res) => {
   const user = getAuthenticatedUser(req);
   const data = createPostSchema.parse(req.body);
   const post = await createPost.execute({ data, author: user });
-  res.status(201).json(toPostResponse(post));
+  res.status(201).json(toPostOutputDTO(post));
 };
 
 export const updatePostController: RequestHandler = async (req, res) => {
@@ -84,7 +64,7 @@ export const updatePostController: RequestHandler = async (req, res) => {
   const { id } = postIdParamsSchema.parse(req.params);
   const data = updatePostSchema.parse(req.body);
   const post = await updatePost.execute({ postId: id, data, user });
-  res.status(200).json(toPostResponse(post));
+  res.status(200).json(toPostOutputDTO(post));
 };
 
 export const deletePostController: RequestHandler = async (req, res) => {
