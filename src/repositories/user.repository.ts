@@ -2,7 +2,7 @@ export type UserRecord = { id: number; name: string; email: string };
 
 export type UserWithPasswordRecord = UserRecord & { passwordHash: string };
 
-/** Abstração de persistência de usuários: o service depende só disto, nunca do ORM. */
+/** Abstração de persistência de usuários: os use cases dependem só disto, nunca do ORM. */
 export interface UserRepository {
   existsByEmail(email: string): Promise<boolean>;
   findByEmailWithPassword(email: string): Promise<UserWithPasswordRecord | null>;

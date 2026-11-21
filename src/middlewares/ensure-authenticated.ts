@@ -1,9 +1,16 @@
 import type { Request, RequestHandler } from 'express';
 import { AppError } from '../errors/app-error.ts';
 import { DrizzleUserRepository } from '../repositories/drizzle-user.repository.ts';
-import { AuthService, type AuthenticatedUser } from '../services/auth.service.ts';
+import type { AuthenticatedUser } from '../use-cases/auth/auth-session.ts';
+import {
+  FindUserByTokenUseCase,
+  type FindUserByTokenInput,
+} from '../use-cases/auth/find-user-by-token.use-case.ts';
+import type { UseCase } from '../use-cases/use-case.ts';
 
-const authService = new AuthService(new DrizzleUserRepository());
+// Composição fora do handler: o middleware só conhece a abstração `UseCase`.
+const findUserByToken: UseCase<FindUserByTokenInput, AuthenticatedUser | null> =
+  new FindUserByTokenUseCase(new DrizzleUserRepository());
 
 declare global {
   namespace Express {
@@ -22,7 +29,7 @@ export const ensureAuthenticated: RequestHandler = async (req, _res, next) => {
   const match = req.headers.authorization?.trim().match(BEARER_PATTERN);
   if (!match) throw unauthorized();
 
-  const user = await authService.findUserByToken(match[1].toLowerCase());
+  const user = await findUserByToken.execute({ token: match[1].toLowerCase() });
   if (!user) throw unauthorized();
 
   req.user = user;
