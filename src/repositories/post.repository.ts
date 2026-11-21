@@ -2,7 +2,7 @@ export type PostRecord = { id: number; title: string; content: string; createdAt
 
 export type PostWithAuthorRecord = PostRecord & { author: { id: number; name: string } };
 
-/** Abstração de persistência de posts: o service depende só disto, nunca do ORM. */
+/** Abstração de persistência de posts: os use cases dependem só disto, nunca do ORM. */
 export interface PostRepository {
   findMany(params: {
     limit: number;
