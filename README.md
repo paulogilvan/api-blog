@@ -6,6 +6,7 @@ API REST de blog com autenticação por token de sessão e gestão de posts, esc
 - Usuários autenticados podem **criar, editar e apagar apenas os próprios posts**.
 - A **listagem** (paginada) e a **consulta individual** de posts são públicas.
 - Usuários autenticados podem **curtir e descurtir** posts.
+- Usuários autenticados podem **responder** (reply) posts.
 
 ## Stack
 
@@ -94,6 +95,7 @@ Authorization: Bearer <token>
 | `DELETE` | `/api/posts/:id` | Sim | Apaga o próprio post |
 | `POST` | `/api/posts/:id/likes` | Sim | Curte um post |
 | `DELETE` | `/api/posts/:id/likes` | Sim | Descurte um post |
+| `POST` | `/api/posts/:id/replies` | Sim | Responde um post |
 | `GET` | `/api/health` | Não | Status da API e do banco |
 
 ### Autenticação
@@ -181,6 +183,29 @@ curl -X POST http://localhost:3333/api/posts/1/likes \
 - Da mesma forma, descurtir um post que o usuário não curtiu responde 200 sem mudar nada.
 - O autor pode curtir o próprio post.
 
+### Replies
+
+**`POST /api/posts/:id/replies`** responde o post com o usuário do token. Recebe `content` (1 a 1000 caracteres, sem os espaços das pontas). Campos extras são rejeitados. Responde **201** com a reply criada. Post inexistente retorna **404**.
+
+```bash
+curl -X POST http://localhost:3333/api/posts/1/replies \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"Ótimo post!"}'
+```
+
+```json
+{
+  "id": 10,
+  "content": "Ótimo post!",
+  "createdAt": "2026-08-07T22:00:00.000Z",
+  "author": { "id": 2, "name": "João" }
+}
+```
+
+- Replies são planas: sempre respondem o post, nunca outra reply.
+- O autor do post também pode responder, e o mesmo usuário pode responder várias vezes.
+
 Os parâmetros `id` e `page` aceitam apenas inteiros decimais positivos (`1`, `2`, `42`). Valores como `0`, `-1`, `01`, `1.5` ou `0x10` retornam 400.
 
 ### Erros
@@ -222,10 +247,10 @@ Route → (ensureAuthenticated) → Controller → Use Case → Repository / Uti
 Cada camada tem uma responsabilidade só (SRP):
 
 - **Controller:** cuida do HTTP. Valida `body`, `params` e `query` com Zod, chama o use case e **delega a montagem do corpo da resposta** aos mappers de DTO de saída.
-- **DTOs de saída:** descrevem o JSON da API em `src/dtos/`: `PostOutputDTO`, `PostDetailOutputDTO` e `PostListOutputDTO` (posts), `LikesOutputDTO` (likes) e `AuthOutputDTO` (cadastro e login). Os mappers (`toPostOutputDTO`, `toPostDetailOutputDTO`, `toPostListOutputDTO`, `toLikesOutputDTO`, `toAuthOutputDTO`) são funções puras que escolhem os campos expostos (o hash da senha nunca sai), convertem datas para ISO e montam o envelope `{ data, meta }` da listagem.
-- **Use cases:** cada operação é uma classe própria que implementa a interface `UseCase<Input, Output>`, com um único método `execute`. Posts: `ListPostsUseCase`, `GetPostUseCase`, `CreatePostUseCase`, `UpdatePostUseCase` e `DeletePostUseCase`. Likes: `LikePostUseCase` e `UnlikePostUseCase`. Auth: `RegisterUseCase`, `LoginUseCase` e `FindUserByTokenUseCase`. Concentram as regras de negócio (posse do post, paginação, cadastro e login, erros 401/403/404/409), devolvem dados de domínio e não conhecem Express, ORM nem bibliotecas de criptografia.
-- **Repository:** é a interface de persistência que os use cases usam (`PostRepository`, `LikeRepository`, `UserRepository`).
-- **Adapter Drizzle:** implementa o repository com Drizzle (`DrizzlePostRepository`, `DrizzleLikeRepository`, `DrizzleUserRepository`). Detalhes do banco ficam só aqui, como os códigos de erro do Postgres `23505` (unicidade, e-mail duplicado) e `23503` (chave estrangeira, like em post inexistente) e o `ON CONFLICT DO NOTHING` que torna o like idempotente.
+- **DTOs de saída:** descrevem o JSON da API em `src/dtos/`: `PostOutputDTO`, `PostDetailOutputDTO` e `PostListOutputDTO` (posts), `LikesOutputDTO` (likes), `ReplyOutputDTO` (replies) e `AuthOutputDTO` (cadastro e login). Os mappers (`toPostOutputDTO`, `toPostDetailOutputDTO`, `toPostListOutputDTO`, `toLikesOutputDTO`, `toReplyOutputDTO`, `toAuthOutputDTO`) são funções puras que escolhem os campos expostos (o hash da senha nunca sai), convertem datas para ISO e montam o envelope `{ data, meta }` da listagem.
+- **Use cases:** cada operação é uma classe própria que implementa a interface `UseCase<Input, Output>`, com um único método `execute`. Posts: `ListPostsUseCase`, `GetPostUseCase`, `CreatePostUseCase`, `UpdatePostUseCase` e `DeletePostUseCase`. Likes: `LikePostUseCase` e `UnlikePostUseCase`. Replies: `CreateReplyUseCase`. Auth: `RegisterUseCase`, `LoginUseCase` e `FindUserByTokenUseCase`. Concentram as regras de negócio (posse do post, paginação, cadastro e login, erros 401/403/404/409), devolvem dados de domínio e não conhecem Express, ORM nem bibliotecas de criptografia.
+- **Repository:** é a interface de persistência que os use cases usam (`PostRepository`, `LikeRepository`, `ReplyRepository`, `UserRepository`).
+- **Adapter Drizzle:** implementa o repository com Drizzle (`DrizzlePostRepository`, `DrizzleLikeRepository`, `DrizzleReplyRepository`, `DrizzleUserRepository`). Detalhes do banco ficam só aqui, como os códigos de erro do Postgres `23505` (unicidade, e-mail duplicado) e `23503` (chave estrangeira, like ou reply em post inexistente) e o `ON CONFLICT DO NOTHING` que torna o like idempotente.
 - **Utils:** interfaces de funções auxiliares usadas pelos use cases de auth (`PasswordHasher`, `TokenGenerator`) e seus adapters (`BcryptPasswordHasher`, `CryptoTokenGenerator`). O custo do bcrypt e o hash fictício que protege o login contra timing attack ficam no adapter.
 - **Middlewares de autenticação:** `ensureAuthenticated` resolve o usuário a partir do token antes do controller e exige o token. `optionalAuthentication` (usado em `GET /api/posts/:id`) deixa a requisição seguir anônima sem o header, mas responde 401 se o header vier inválido.
 - **Error handler:** converte `ZodError` e `AppError` no formato de erro padrão e esconde detalhes de erros inesperados.
@@ -260,7 +285,7 @@ src/
 ├── env.ts               # validação das variáveis de ambiente
 ├── controllers/         # HTTP: entrada, status e chamada aos use cases
 ├── dtos/                # DTOs de saída + mappers (formato do JSON da API)
-├── use-cases/           # regras de negócio, um use case por operação (posts/, likes/, auth/)
+├── use-cases/           # regras de negócio, um use case por operação (posts/, likes/, replies/, auth/)
 ├── repositories/        # interfaces de persistência + adapters Drizzle
 ├── utils/               # interfaces de hash de senha e token + adapters
 ├── schemas/             # schemas Zod de entrada
