@@ -1,8 +1,9 @@
 import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../../src/app.ts';
-import { pool } from '../../../src/db/index.ts';
-import { createPost, likePost, registerUser } from '../../helpers/api.ts';
+import { db, pool } from '../../../src/db/index.ts';
+import { replies } from '../../../src/db/schema.ts';
+import { createPost, createReply, likePost, registerUser } from '../../helpers/api.ts';
 import { resetDatabase } from '../../helpers/database.ts';
 
 const app = createApp();
@@ -37,7 +38,9 @@ describe('GET /api/posts/:id', () => {
         createdAt: post.createdAt,
         author: { id: user.id, name: user.name },
         likesCount: 0,
+        repliesCount: 0,
         likedByMe: false,
+        replies: [],
       });
     });
 
@@ -134,6 +137,135 @@ describe('GET /api/posts/:id', () => {
       const response = await getPost(post.id, token);
 
       expect(response.body).toMatchObject({ likesCount: 0, likedByMe: false });
+    });
+  });
+
+  describe('replies', () => {
+    it('returns the replies in the contract format with repliesCount', async () => {
+      const author = await registerUser(app);
+      const replier = await registerUser(app, { name: 'Jane Roe', email: 'jane@example.com' });
+      const post = await createPost(app, author.token);
+      const reply = await createReply(app, replier.token, post.id, { content: 'Nice!' });
+
+      const response = await getPost(post.id);
+
+      expect(response.status).toBe(200);
+      expect(response.body.repliesCount).toBe(1);
+      expect(response.body.replies).toEqual([
+        {
+          id: reply.id,
+          content: 'Nice!',
+          createdAt: reply.createdAt,
+          author: { id: replier.user.id, name: 'Jane Roe' },
+        },
+      ]);
+    });
+
+    it('orders replies by createdAt ascending (oldest first)', async () => {
+      const { token, user } = await registerUser(app);
+      const post = await createPost(app, token);
+      // Inseridas fora de ordem, com createdAt controlado.
+      const base = Date.UTC(2026, 0, 1);
+      await db.insert(replies).values([
+        { content: 'Third', postId: post.id, authorId: user.id, createdAt: new Date(base + 120_000) },
+        { content: 'First', postId: post.id, authorId: user.id, createdAt: new Date(base) },
+        { content: 'Second', postId: post.id, authorId: user.id, createdAt: new Date(base + 60_000) },
+      ]);
+
+      const response = await getPost(post.id);
+
+      expect(response.body.replies.map((r: { content: string }) => r.content)).toEqual([
+        'First',
+        'Second',
+        'Third',
+      ]);
+    });
+
+    it('breaks createdAt ties by id ascending', async () => {
+      const { token, user } = await registerUser(app);
+      const post = await createPost(app, token);
+      const createdAt = new Date(Date.UTC(2026, 0, 1));
+      const inserted = await db
+        .insert(replies)
+        .values(
+          ['A', 'B', 'C'].map((content) => ({ content, postId: post.id, authorId: user.id, createdAt })),
+        )
+        .returning({ id: replies.id });
+
+      const response = await getPost(post.id);
+
+      expect(response.body.replies.map((r: { id: number }) => r.id)).toEqual(
+        inserted.map((r) => r.id).sort((a, b) => a - b),
+      );
+    });
+
+    it('returns all replies, without pagination', async () => {
+      const { token, user } = await registerUser(app);
+      const post = await createPost(app, token);
+      await db
+        .insert(replies)
+        .values(
+          Array.from({ length: 25 }, (_, i) => ({
+            content: `Reply ${i + 1}`,
+            postId: post.id,
+            authorId: user.id,
+          })),
+        );
+
+      const response = await getPost(post.id);
+
+      expect(response.body.repliesCount).toBe(25);
+      expect(response.body.replies).toHaveLength(25);
+    });
+
+    it('returns only the replies of the requested post', async () => {
+      const { token } = await registerUser(app);
+      const post = await createPost(app, token);
+      const other = await createPost(app, token);
+      const mine = await createReply(app, token, post.id);
+      await createReply(app, token, other.id);
+
+      const response = await getPost(post.id);
+
+      expect(response.body.repliesCount).toBe(1);
+      expect(response.body.replies.map((r: { id: number }) => r.id)).toEqual([mine.id]);
+    });
+
+    it('stops returning a reply after it is deleted', async () => {
+      const { token } = await registerUser(app);
+      const post = await createPost(app, token);
+      const kept = await createReply(app, token, post.id);
+      const removed = await createReply(app, token, post.id);
+      await request(app)
+        .delete(`/api/posts/${post.id}/replies/${removed.id}`)
+        .set('Authorization', `Bearer ${token}`);
+
+      const response = await getPost(post.id);
+
+      expect(response.body.repliesCount).toBe(1);
+      expect(response.body.replies.map((r: { id: number }) => r.id)).toEqual([kept.id]);
+    });
+
+    it('does not expose reply authors emails', async () => {
+      const author = await registerUser(app);
+      const replier = await registerUser(app, { email: 'jane@example.com' });
+      const post = await createPost(app, author.token);
+      await createReply(app, replier.token, post.id);
+
+      const response = await getPost(post.id);
+
+      expect(JSON.stringify(response.body)).not.toContain('jane@example.com');
+    });
+
+    it('returns the same replies with or without token', async () => {
+      const { token } = await registerUser(app);
+      const post = await createPost(app, token);
+      await createReply(app, token, post.id);
+
+      const anonymous = await getPost(post.id);
+      const authenticated = await getPost(post.id, token);
+
+      expect(authenticated.body.replies).toEqual(anonymous.body.replies);
     });
   });
 

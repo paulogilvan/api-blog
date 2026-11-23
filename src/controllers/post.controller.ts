@@ -7,7 +7,9 @@ import {
 import { getAuthenticatedUser, getOptionalUser } from '../middlewares/ensure-authenticated.ts';
 import { DrizzleLikeRepository } from '../repositories/drizzle-like.repository.ts';
 import { DrizzlePostRepository } from '../repositories/drizzle-post.repository.ts';
+import { DrizzleReplyRepository } from '../repositories/drizzle-reply.repository.ts';
 import type { LikeRepository } from '../repositories/like.repository.ts';
+import type { ReplyRepository } from '../repositories/reply.repository.ts';
 import type { PostRepository, PostWithAuthorRecord } from '../repositories/post.repository.ts';
 import {
   createPostSchema,
@@ -40,11 +42,13 @@ import type { UseCase } from '../use-cases/use-case.ts';
 // Os handlers só conhecem a abstração `UseCase`.
 const postRepository: PostRepository = new DrizzlePostRepository();
 const likeRepository: LikeRepository = new DrizzleLikeRepository();
+const replyRepository: ReplyRepository = new DrizzleReplyRepository();
 
 const listPosts: UseCase<ListPostsInput, ListPostsOutput> = new ListPostsUseCase(postRepository);
 const getPost: UseCase<GetPostInput, PostDetailRecord> = new GetPostUseCase(
   postRepository,
   likeRepository,
+  replyRepository,
 );
 const createPost: UseCase<CreatePostUseCaseInput, PostWithAuthorRecord> = new CreatePostUseCase(
   postRepository,

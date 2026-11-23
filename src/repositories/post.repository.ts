@@ -1,7 +1,7 @@
 export type PostRecord = { id: number; title: string; content: string; createdAt: Date };
 
 /** Contadores derivados de outras tabelas, calculados na leitura (não são colunas de `posts`). */
-export type PostCountersRecord = { likesCount: number };
+export type PostCountersRecord = { likesCount: number; repliesCount: number };
 
 export type PostWithAuthorRecord = PostRecord &
   PostCountersRecord & { author: { id: number; name: string } };

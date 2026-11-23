@@ -89,7 +89,7 @@ Authorization: Bearer <token>
 | `POST` | `/api/auth/register` | Não | Cadastra um usuário e retorna o token |
 | `POST` | `/api/auth/login` | Não | Autentica e retorna um novo token |
 | `GET` | `/api/posts` | Não | Lista os posts, paginados |
-| `GET` | `/api/posts/:id` | Opcional | Retorna um post (com `likedByMe` se houver token) |
+| `GET` | `/api/posts/:id` | Opcional | Retorna um post com suas replies (e `likedByMe` se houver token) |
 | `POST` | `/api/posts` | Sim | Cria um post |
 | `PUT` | `/api/posts/:id` | Sim | Atualiza parcialmente o próprio post |
 | `DELETE` | `/api/posts/:id` | Sim | Apaga o próprio post |
@@ -124,7 +124,7 @@ curl -X POST http://localhost:3333/api/auth/register \
 
 ### Posts
 
-A listagem e as respostas de criação e edição usam o formato abaixo. O autor aparece só com `id` e `name`, nunca com o e-mail, e `likesCount` é o total de likes do post.
+A listagem e as respostas de criação e edição usam o formato abaixo. O autor aparece só com `id` e `name`, nunca com o e-mail. `likesCount` e `repliesCount` são os totais de likes e de replies do post.
 
 ```json
 {
@@ -133,15 +133,40 @@ A listagem e as respostas de criação e edição usam o formato abaixo. O autor
   "content": "Olá, mundo!",
   "createdAt": "2026-08-07T21:00:00.000Z",
   "author": { "id": 1, "name": "Maria" },
-  "likesCount": 3
+  "likesCount": 3,
+  "repliesCount": 1
 }
 ```
 
-**`GET /api/posts/:id`** retorna o mesmo formato acrescido de `likedByMe`, que diz se o usuário do token curtiu o post. A rota é pública com autenticação opcional:
+**`GET /api/posts/:id`** retorna o mesmo formato acrescido de `likedByMe` e da lista completa de `replies`:
 
-- Sem o header `Authorization`, `likedByMe` vem `false`.
-- Com um token válido, `likedByMe` reflete o like desse usuário.
-- Com o header presente, mas malformado ou com token inválido, responde **401** (não cai em silêncio para anônimo).
+```json
+{
+  "id": 1,
+  "title": "Meu primeiro post",
+  "content": "Olá, mundo!",
+  "createdAt": "2026-08-07T21:00:00.000Z",
+  "author": { "id": 1, "name": "Maria" },
+  "likesCount": 3,
+  "repliesCount": 1,
+  "likedByMe": true,
+  "replies": [
+    {
+      "id": 10,
+      "content": "Ótimo post!",
+      "createdAt": "2026-08-07T22:00:00.000Z",
+      "author": { "id": 2, "name": "João" }
+    }
+  ]
+}
+```
+
+- `replies` vem **sem paginação**, da mais antiga para a mais nova (`createdAt` crescente, com `id` como desempate), e é `[]` quando o post não tem respostas. A listagem traz só o `repliesCount`, nunca a lista.
+- `likedByMe` diz se o usuário do token curtiu o post. A rota é pública com autenticação opcional:
+
+  - Sem o header `Authorization`, `likedByMe` vem `false`.
+  - Com um token válido, `likedByMe` reflete o like desse usuário.
+  - Com o header presente, mas malformado ou com token inválido, responde **401** (não cai em silêncio para anônimo).
 
 **`POST /api/posts`** recebe `title` (1 a 200 caracteres) e `content` (pelo menos 1 caractere). Os dois campos têm os espaços das pontas removidos. O autor vem do token. Responde **201**.
 
@@ -162,7 +187,7 @@ Editar ou apagar o post de outro usuário retorna **403**. Um post inexistente r
 
 ```json
 {
-  "data": [ { "id": 12, "title": "...", "content": "...", "createdAt": "...", "author": { "id": 1, "name": "Maria" }, "likesCount": 0 } ],
+  "data": [ { "id": 12, "title": "...", "content": "...", "createdAt": "...", "author": { "id": 1, "name": "Maria" }, "likesCount": 0, "repliesCount": 0 } ],
   "meta": { "page": 2, "limit": 10, "total": 25, "totalPages": 3 }
 }
 ```
@@ -269,9 +294,11 @@ Os use cases recebem repositories e utils pelo construtor e dependem só das int
 // src/controllers/post.controller.ts
 const postRepository: PostRepository = new DrizzlePostRepository();
 const likeRepository: LikeRepository = new DrizzleLikeRepository();
+const replyRepository: ReplyRepository = new DrizzleReplyRepository();
 const getPost: UseCase<GetPostInput, PostDetailRecord> = new GetPostUseCase(
   postRepository,
   likeRepository,
+  replyRepository,
 );
 
 export const getPostController: RequestHandler = async (req, res) => {

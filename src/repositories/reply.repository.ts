@@ -6,6 +6,8 @@ export type ReplyWithAuthorRecord = ReplyRecord & { author: { id: number; name: 
 export interface ReplyRepository {
   /** Cria a reply no post. Retorna `null` quando o post não existe. */
   create(data: { content: string; postId: number; authorId: number }): Promise<ReplyRecord | null>;
+  /** Todas as replies do post (sem paginação), da mais antiga para a mais nova. */
+  findManyByPostId(postId: number): Promise<ReplyWithAuthorRecord[]>;
   /**
    * Autor da reply, buscando-a **dentro do post** informado. Retorna `null` se a reply não
    * existe ou pertence a outro post.

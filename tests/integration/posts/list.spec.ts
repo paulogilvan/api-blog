@@ -3,7 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../../src/app.ts';
 import { db, pool } from '../../../src/db/index.ts';
 import { posts } from '../../../src/db/schema.ts';
-import { likePost, registerUser } from '../../helpers/api.ts';
+import { createReply, likePost, registerUser } from '../../helpers/api.ts';
 import { resetDatabase } from '../../helpers/database.ts';
 
 const app = createApp();
@@ -55,8 +55,24 @@ describe('GET /api/posts', () => {
           createdAt: post.createdAt.toISOString(),
           author: { id: user.id, name: user.name },
           likesCount: 0,
+          repliesCount: 0,
         },
       ]);
+    });
+
+    it('returns repliesCount for each post, without the replies list', async () => {
+      const { token, user } = await registerUser(app);
+      const [first, second] = await seedPosts(user.id, 2);
+      await createReply(app, token, first.id);
+      await createReply(app, token, first.id);
+
+      const response = await request(app).get(route);
+
+      const countsById = Object.fromEntries(
+        response.body.data.map((p: { id: number; repliesCount: number }) => [p.id, p.repliesCount]),
+      );
+      expect(countsById).toEqual({ [first.id]: 2, [second.id]: 0 });
+      expect(response.body.data[0]).not.toHaveProperty('replies');
     });
 
     it('returns likesCount for each post', async () => {

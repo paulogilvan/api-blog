@@ -1,6 +1,7 @@
 import type { PostWithAuthorRecord } from '../repositories/post.repository.ts';
 import type { PostDetailRecord } from '../use-cases/posts/get-post.use-case.ts';
 import type { ListPostsOutput } from '../use-cases/posts/list-posts.use-case.ts';
+import { toReplyOutputDTO, type ReplyOutputDTO } from './reply-output.dto.ts';
 
 /** Formato público de um post na API (`PostSummary` do contrato): listagem, criação e edição. */
 export type PostOutputDTO = {
@@ -11,10 +12,14 @@ export type PostOutputDTO = {
   createdAt: string;
   author: { id: number; name: string };
   likesCount: number;
+  repliesCount: number;
 };
 
 /** Post individual (`PostDetail` do contrato): `GET /posts/:id`. */
-export type PostDetailOutputDTO = PostOutputDTO & { likedByMe: boolean };
+export type PostDetailOutputDTO = PostOutputDTO & {
+  likedByMe: boolean;
+  replies: ReplyOutputDTO[];
+};
 
 export type PaginationMetaDTO = {
   page: number;
@@ -34,11 +39,16 @@ export function toPostOutputDTO(post: PostWithAuthorRecord): PostOutputDTO {
     createdAt: post.createdAt.toISOString(),
     author: { id: post.author.id, name: post.author.name },
     likesCount: post.likesCount,
+    repliesCount: post.repliesCount,
   };
 }
 
 export function toPostDetailOutputDTO(post: PostDetailRecord): PostDetailOutputDTO {
-  return { ...toPostOutputDTO(post), likedByMe: post.likedByMe };
+  return {
+    ...toPostOutputDTO(post),
+    likedByMe: post.likedByMe,
+    replies: post.replies.map(toReplyOutputDTO),
+  };
 }
 
 export function toPostListOutputDTO(

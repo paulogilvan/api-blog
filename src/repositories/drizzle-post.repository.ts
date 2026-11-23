@@ -1,6 +1,6 @@
 import { desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.ts';
-import { postLikes, posts, users } from '../db/schema.ts';
+import { postLikes, posts, replies, users } from '../db/schema.ts';
 import type {
   PostCountersRecord,
   PostRecord,
@@ -15,14 +15,18 @@ const postColumns = {
   createdAt: posts.createdAt,
 };
 
-// Subconsulta correlacionada: conta os likes de cada post usando o prefixo `post_id` da PK
-// de post_likes (index-only scan), sem GROUP BY que atrapalharia a paginação.
+// Subconsultas correlacionadas: contam likes e replies de cada post usando índices que
+// começam por `post_id` (PK de post_likes e replies_post_id_created_at_id_idx), sem
+// GROUP BY que atrapalharia a paginação.
 // `count(*)` é bigint no Postgres (chega como string no driver): `::int` + mapWith(Number).
 const likesCount = sql<number>`(select count(*)::int from ${postLikes} where ${postLikes.postId} = ${posts.id})`.mapWith(
   Number,
 );
+const repliesCount = sql<number>`(select count(*)::int from ${replies} where ${replies.postId} = ${posts.id})`.mapWith(
+  Number,
+);
 
-const postWithCountersColumns = { ...postColumns, likesCount };
+const postWithCountersColumns = { ...postColumns, likesCount, repliesCount };
 
 // Post + contadores + nome do autor (nunca o e-mail), para as rotas públicas.
 const publicPostColumns = {

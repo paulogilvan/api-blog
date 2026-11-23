@@ -19,6 +19,7 @@ export type CreatedPost = {
   createdAt: string;
   author: { id: number; name: string };
   likesCount: number;
+  repliesCount: number;
 };
 
 export async function createPost(

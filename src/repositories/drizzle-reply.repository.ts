@@ -1,6 +1,6 @@
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import { db } from '../db/index.ts';
-import { replies } from '../db/schema.ts';
+import { replies, users } from '../db/schema.ts';
 import { isPgError, PG_FOREIGN_KEY_VIOLATION } from './pg-error.ts';
 import type { ReplyRepository } from './reply.repository.ts';
 
@@ -25,6 +25,23 @@ export class DrizzleReplyRepository implements ReplyRepository {
       if (isPgError(error, PG_FOREIGN_KEY_VIOLATION, POST_FK_CONSTRAINT)) return null;
       throw error;
     }
+  }
+
+  async findManyByPostId(postId: number) {
+    const rows = await db
+      .select({ ...replyColumns, authorId: users.id, authorName: users.name })
+      .from(replies)
+      .innerJoin(users, eq(replies.authorId, users.id))
+      .where(eq(replies.postId, postId))
+      // `id` desempata replies com o mesmo createdAt; a ordem bate com o índice
+      // (post_id, created_at, id).
+      .orderBy(asc(replies.createdAt), asc(replies.id));
+
+    // Autor exposto só com id e nome (nunca o e-mail).
+    return rows.map(({ authorId, authorName, ...reply }) => ({
+      ...reply,
+      author: { id: authorId, name: authorName },
+    }));
   }
 
   async findAuthorId({ replyId, postId }: { replyId: number; postId: number }) {

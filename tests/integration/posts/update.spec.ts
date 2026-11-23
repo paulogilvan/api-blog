@@ -4,7 +4,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../../src/app.ts';
 import { db, pool } from '../../../src/db/index.ts';
 import { posts } from '../../../src/db/schema.ts';
-import { createPost, likePost, registerUser } from '../../helpers/api.ts';
+import { createPost, createReply, likePost, registerUser } from '../../helpers/api.ts';
 import { resetDatabase } from '../../helpers/database.ts';
 
 const app = createApp();
@@ -44,20 +44,23 @@ describe('PUT /api/posts/:id', () => {
         createdAt: post.createdAt,
         author: { id: user.id, name: user.name },
         likesCount: 0,
+        repliesCount: 0,
       });
     });
 
-    it('returns the current likesCount of the post', async () => {
+    it('returns the current likesCount and repliesCount of the post', async () => {
       const { token } = await registerUser(app);
       const fan = await registerUser(app, { email: 'fan@example.com' });
       const post = await createPost(app, token);
       await likePost(app, token, post.id);
       await likePost(app, fan.token, post.id);
+      await createReply(app, fan.token, post.id);
 
       const response = await updatePost(token, post.id, { title: 'New title' });
 
       expect(response.status).toBe(200);
-      expect(response.body.likesCount).toBe(2);
+      expect(response.body).toMatchObject({ likesCount: 2, repliesCount: 1 });
+      expect(response.body).not.toHaveProperty('replies');
     });
 
     it('updates only the title (partial update)', async () => {
