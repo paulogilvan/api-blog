@@ -45,6 +45,7 @@ describe('POST /api/posts', () => {
         content: validPost.content,
         createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
         author: { id: user.id, name: author.name },
+        likesCount: 0,
       });
     });
 

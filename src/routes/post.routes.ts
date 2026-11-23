@@ -7,13 +7,17 @@ import {
   listPostsController,
   updatePostController,
 } from '../controllers/post.controller.ts';
-import { ensureAuthenticated } from '../middlewares/ensure-authenticated.ts';
+import {
+  ensureAuthenticated,
+  optionalAuthentication,
+} from '../middlewares/ensure-authenticated.ts';
 
 export const postRoutes = Router();
 
 // Públicas
 postRoutes.get('/', listPostsController);
-postRoutes.get('/:id', getPostController);
+// Pública com autenticação opcional: o token, se enviado, define `likedByMe`.
+postRoutes.get('/:id', optionalAuthentication, getPostController);
 
 // Protegidas
 postRoutes.post('/', ensureAuthenticated, createPostController);

@@ -11,4 +11,6 @@ export interface LikeRepository {
    */
   remove(data: { postId: number; userId: number }): Promise<boolean>;
   countByPostId(postId: number): Promise<number>;
+  /** Diz se o usuário curtiu o post. */
+  exists(data: { postId: number; userId: number }): Promise<boolean>;
 }

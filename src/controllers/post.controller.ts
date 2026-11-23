@@ -1,7 +1,13 @@
 import type { RequestHandler } from 'express';
-import { toPostListOutputDTO, toPostOutputDTO } from '../dtos/post-output.dto.ts';
-import { getAuthenticatedUser } from '../middlewares/ensure-authenticated.ts';
+import {
+  toPostDetailOutputDTO,
+  toPostListOutputDTO,
+  toPostOutputDTO,
+} from '../dtos/post-output.dto.ts';
+import { getAuthenticatedUser, getOptionalUser } from '../middlewares/ensure-authenticated.ts';
+import { DrizzleLikeRepository } from '../repositories/drizzle-like.repository.ts';
 import { DrizzlePostRepository } from '../repositories/drizzle-post.repository.ts';
+import type { LikeRepository } from '../repositories/like.repository.ts';
 import type { PostRepository, PostWithAuthorRecord } from '../repositories/post.repository.ts';
 import {
   createPostSchema,
@@ -14,7 +20,11 @@ import {
   type CreatePostUseCaseInput,
 } from '../use-cases/posts/create-post.use-case.ts';
 import { DeletePostUseCase, type DeletePostInput } from '../use-cases/posts/delete-post.use-case.ts';
-import { GetPostUseCase, type GetPostInput } from '../use-cases/posts/get-post.use-case.ts';
+import {
+  GetPostUseCase,
+  type GetPostInput,
+  type PostDetailRecord,
+} from '../use-cases/posts/get-post.use-case.ts';
 import {
   ListPostsUseCase,
   type ListPostsInput,
@@ -29,9 +39,13 @@ import type { UseCase } from '../use-cases/use-case.ts';
 // Composição: as implementações concretas são ligadas uma única vez, fora dos handlers.
 // Os handlers só conhecem a abstração `UseCase`.
 const postRepository: PostRepository = new DrizzlePostRepository();
+const likeRepository: LikeRepository = new DrizzleLikeRepository();
 
 const listPosts: UseCase<ListPostsInput, ListPostsOutput> = new ListPostsUseCase(postRepository);
-const getPost: UseCase<GetPostInput, PostWithAuthorRecord> = new GetPostUseCase(postRepository);
+const getPost: UseCase<GetPostInput, PostDetailRecord> = new GetPostUseCase(
+  postRepository,
+  likeRepository,
+);
 const createPost: UseCase<CreatePostUseCaseInput, PostWithAuthorRecord> = new CreatePostUseCase(
   postRepository,
 );
@@ -48,8 +62,9 @@ export const listPostsController: RequestHandler = async (req, res) => {
 
 export const getPostController: RequestHandler = async (req, res) => {
   const { id } = postIdParamsSchema.parse(req.params);
-  const post = await getPost.execute({ postId: id });
-  res.status(200).json(toPostOutputDTO(post));
+  const viewer = getOptionalUser(req);
+  const post = await getPost.execute({ postId: id, viewerId: viewer?.id ?? null });
+  res.status(200).json(toPostDetailOutputDTO(post));
 };
 
 export const createPostController: RequestHandler = async (req, res) => {

@@ -19,6 +19,7 @@ export class CreatePostUseCase implements UseCase<CreatePostUseCaseInput, PostWi
       authorId: author.id,
     });
 
-    return { ...post, author: { id: author.id, name: author.name } };
+    // Post recém-criado ainda não tem likes.
+    return { ...post, likesCount: 0, author: { id: author.id, name: author.name } };
   }
 }

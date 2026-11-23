@@ -1,7 +1,12 @@
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.ts';
-import { posts, users } from '../db/schema.ts';
-import type { PostRecord, PostRepository, PostWithAuthorRecord } from './post.repository.ts';
+import { postLikes, posts, users } from '../db/schema.ts';
+import type {
+  PostCountersRecord,
+  PostRecord,
+  PostRepository,
+  PostWithAuthorRecord,
+} from './post.repository.ts';
 
 const postColumns = {
   id: posts.id,
@@ -10,14 +15,23 @@ const postColumns = {
   createdAt: posts.createdAt,
 };
 
-// Post + nome do autor (nunca o e-mail), para as rotas públicas.
+// Subconsulta correlacionada: conta os likes de cada post usando o prefixo `post_id` da PK
+// de post_likes (index-only scan), sem GROUP BY que atrapalharia a paginação.
+// `count(*)` é bigint no Postgres (chega como string no driver): `::int` + mapWith(Number).
+const likesCount = sql<number>`(select count(*)::int from ${postLikes} where ${postLikes.postId} = ${posts.id})`.mapWith(
+  Number,
+);
+
+const postWithCountersColumns = { ...postColumns, likesCount };
+
+// Post + contadores + nome do autor (nunca o e-mail), para as rotas públicas.
 const publicPostColumns = {
-  ...postColumns,
+  ...postWithCountersColumns,
   authorId: users.id,
   authorName: users.name,
 };
 
-type PublicPostRow = PostRecord & { authorId: number; authorName: string };
+type PublicPostRow = PostRecord & PostCountersRecord & { authorId: number; authorName: string };
 
 function toPostWithAuthor({ authorId, authorName, ...post }: PublicPostRow): PostWithAuthorRecord {
   return { ...post, author: { id: authorId, name: authorName } };
@@ -80,7 +94,8 @@ export class DrizzlePostRepository implements PostRepository {
         ...(data.content !== undefined ? { content: data.content } : {}),
       })
       .where(eq(posts.id, id))
-      .returning(postColumns);
+      // A resposta do PUT inclui os contadores: calculados no próprio RETURNING.
+      .returning(postWithCountersColumns);
 
     return post ?? null;
   }

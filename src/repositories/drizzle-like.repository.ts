@@ -46,4 +46,14 @@ export class DrizzleLikeRepository implements LikeRepository {
   async countByPostId(postId: number) {
     return db.$count(postLikes, eq(postLikes.postId, postId));
   }
+
+  async exists({ postId, userId }: { postId: number; userId: number }) {
+    const [like] = await db
+      .select({ postId: postLikes.postId })
+      .from(postLikes)
+      .where(and(eq(postLikes.postId, postId), eq(postLikes.userId, userId)))
+      .limit(1);
+
+    return like !== undefined;
+  }
 }

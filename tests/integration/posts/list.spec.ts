@@ -3,7 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../../src/app.ts';
 import { db, pool } from '../../../src/db/index.ts';
 import { posts } from '../../../src/db/schema.ts';
-import { registerUser } from '../../helpers/api.ts';
+import { likePost, registerUser } from '../../helpers/api.ts';
 import { resetDatabase } from '../../helpers/database.ts';
 
 const app = createApp();
@@ -54,8 +54,36 @@ describe('GET /api/posts', () => {
           content: post.content,
           createdAt: post.createdAt.toISOString(),
           author: { id: user.id, name: user.name },
+          likesCount: 0,
         },
       ]);
+    });
+
+    it('returns likesCount for each post', async () => {
+      const { token, user } = await registerUser(app);
+      const fan = await registerUser(app, { email: 'fan@example.com' });
+      const [first, second, third] = await seedPosts(user.id, 3);
+      await likePost(app, token, first.id);
+      await likePost(app, fan.token, first.id);
+      await likePost(app, fan.token, second.id);
+
+      const response = await request(app).get(route);
+
+      const likesById = Object.fromEntries(
+        response.body.data.map((p: { id: number; likesCount: number }) => [p.id, p.likesCount]),
+      );
+      expect(likesById).toEqual({ [first.id]: 2, [second.id]: 1, [third.id]: 0 });
+    });
+
+    it('does not include likedByMe, even with a valid token', async () => {
+      const { token, user } = await registerUser(app);
+      const [post] = await seedPosts(user.id, 1);
+      await likePost(app, token, post.id);
+
+      const response = await request(app).get(route).set('Authorization', `Bearer ${token}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.data[0]).not.toHaveProperty('likedByMe');
     });
 
     it('ignores an invalid Authorization header (public route)', async () => {

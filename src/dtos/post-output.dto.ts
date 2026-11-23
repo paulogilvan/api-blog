@@ -1,7 +1,8 @@
 import type { PostWithAuthorRecord } from '../repositories/post.repository.ts';
+import type { PostDetailRecord } from '../use-cases/posts/get-post.use-case.ts';
 import type { ListPostsOutput } from '../use-cases/posts/list-posts.use-case.ts';
 
-/** Formato público de um post na API. */
+/** Formato público de um post na API (`PostSummary` do contrato): listagem, criação e edição. */
 export type PostOutputDTO = {
   id: number;
   title: string;
@@ -9,7 +10,11 @@ export type PostOutputDTO = {
   /** ISO 8601 */
   createdAt: string;
   author: { id: number; name: string };
+  likesCount: number;
 };
+
+/** Post individual (`PostDetail` do contrato): `GET /posts/:id`. */
+export type PostDetailOutputDTO = PostOutputDTO & { likedByMe: boolean };
 
 export type PaginationMetaDTO = {
   page: number;
@@ -28,7 +33,12 @@ export function toPostOutputDTO(post: PostWithAuthorRecord): PostOutputDTO {
     content: post.content,
     createdAt: post.createdAt.toISOString(),
     author: { id: post.author.id, name: post.author.name },
+    likesCount: post.likesCount,
   };
+}
+
+export function toPostDetailOutputDTO(post: PostDetailRecord): PostDetailOutputDTO {
+  return { ...toPostOutputDTO(post), likedByMe: post.likedByMe };
 }
 
 export function toPostListOutputDTO(
