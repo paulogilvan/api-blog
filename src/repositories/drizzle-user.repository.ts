@@ -1,16 +1,8 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { users } from '../db/schema.ts';
+import { isPgError, PG_UNIQUE_VIOLATION } from './pg-error.ts';
 import type { UserRepository } from './user.repository.ts';
-
-const PG_UNIQUE_VIOLATION = '23505';
-
-function isUniqueViolation(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false;
-  const code = (error as { code?: unknown }).code;
-  const cause = (error as { cause?: unknown }).cause;
-  return code === PG_UNIQUE_VIOLATION || isUniqueViolation(cause);
-}
 
 const userColumns = { id: users.id, name: users.name, email: users.email };
 
@@ -52,7 +44,7 @@ export class DrizzleUserRepository implements UserRepository {
       return user;
     } catch (error) {
       // O índice único do banco é a garantia final contra e-mail duplicado.
-      if (isUniqueViolation(error)) return null;
+      if (isPgError(error, PG_UNIQUE_VIOLATION)) return null;
       throw error;
     }
   }
