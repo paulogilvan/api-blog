@@ -1,11 +1,9 @@
 import type { LikeRepository } from '../../repositories/like.repository.ts';
 import { postNotFound } from '../posts/post-ownership.ts';
 import type { UseCase } from '../use-case.ts';
+import type { LikesCountRecord } from './likes-count.ts';
 
 export type LikePostInput = { postId: number; userId: number };
-
-/** Contagem de likes do post após a operação. */
-export type LikesCountRecord = { likesCount: number };
 
 export class LikePostUseCase implements UseCase<LikePostInput, LikesCountRecord> {
   private readonly likeRepository: LikeRepository;

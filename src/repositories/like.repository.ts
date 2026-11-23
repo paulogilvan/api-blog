@@ -5,5 +5,10 @@ export interface LikeRepository {
    * Retorna `false` quando o post não existe.
    */
   add(data: { postId: number; userId: number }): Promise<boolean>;
+  /**
+   * Remove o like do usuário no post. Idempotente: se o like não existe, nada muda.
+   * Retorna `false` quando o post não existe.
+   */
+  remove(data: { postId: number; userId: number }): Promise<boolean>;
   countByPostId(postId: number): Promise<number>;
 }

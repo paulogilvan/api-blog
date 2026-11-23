@@ -1,6 +1,6 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../db/index.ts';
-import { postLikes } from '../db/schema.ts';
+import { postLikes, posts } from '../db/schema.ts';
 import type { LikeRepository } from './like.repository.ts';
 import { isPgError, PG_FOREIGN_KEY_VIOLATION } from './pg-error.ts';
 
@@ -21,6 +21,26 @@ export class DrizzleLikeRepository implements LikeRepository {
       if (isPgError(error, PG_FOREIGN_KEY_VIOLATION, POST_FK_CONSTRAINT)) return false;
       throw error;
     }
+  }
+
+  async remove({ postId, userId }: { postId: number; userId: number }) {
+    const deleted = await db
+      .delete(postLikes)
+      .where(and(eq(postLikes.postId, postId), eq(postLikes.userId, userId)))
+      .returning({ postId: postLikes.postId });
+
+    // Se havia like, a FK garante que o post existia: dispensa a consulta extra.
+    if (deleted.length > 0) return true;
+
+    // Sem like para apagar, o resultado é o mesmo com ou sem post: só aqui é preciso
+    // diferenciar "post sem like deste usuário" (200) de "post inexistente" (404).
+    const [post] = await db
+      .select({ id: posts.id })
+      .from(posts)
+      .where(eq(posts.id, postId))
+      .limit(1);
+
+    return post !== undefined;
   }
 
   async countByPostId(postId: number) {

@@ -31,3 +31,11 @@ export async function createPost(
     .send(body);
   return response.body as CreatedPost;
 }
+
+export async function likePost(app: Express, token: string, postId: number) {
+  const response = await request(app)
+    .post(`/api/posts/${postId}/likes`)
+    .set('Authorization', `Bearer ${token}`)
+    .send();
+  return response.body as { likes: number };
+}

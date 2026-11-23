@@ -5,7 +5,7 @@ API REST de blog com autenticação por token de sessão e gestão de posts, esc
 - Cadastro e login retornam um **token de sessão**, que é persistido no banco.
 - Usuários autenticados podem **criar, editar e apagar apenas os próprios posts**.
 - A **listagem** (paginada) e a **consulta individual** de posts são públicas.
-- Usuários autenticados podem **curtir** posts.
+- Usuários autenticados podem **curtir e descurtir** posts.
 
 ## Stack
 
@@ -93,6 +93,7 @@ Authorization: Bearer <token>
 | `PUT` | `/api/posts/:id` | Sim | Atualiza parcialmente o próprio post |
 | `DELETE` | `/api/posts/:id` | Sim | Apaga o próprio post |
 | `POST` | `/api/posts/:id/likes` | Sim | Curte um post |
+| `DELETE` | `/api/posts/:id/likes` | Sim | Descurte um post |
 | `GET` | `/api/health` | Não | Status da API e do banco |
 
 ### Autenticação
@@ -158,7 +159,7 @@ Editar ou apagar o post de outro usuário retorna **403**. Um post inexistente r
 
 ### Likes
 
-**`POST /api/posts/:id/likes`** curte o post com o usuário do token. Não tem corpo. Responde **200** com a contagem de likes do post após a operação. Post inexistente retorna **404**.
+**`POST /api/posts/:id/likes`** curte o post com o usuário do token e **`DELETE /api/posts/:id/likes`** remove esse like. Nenhuma das duas tem corpo. Ambas respondem **200** com a contagem de likes do post após a operação. Post inexistente retorna **404**.
 
 ```bash
 curl -X POST http://localhost:3333/api/posts/1/likes \
@@ -170,6 +171,7 @@ curl -X POST http://localhost:3333/api/posts/1/likes \
 ```
 
 - Cada usuário curte um post no máximo uma vez. Curtir de novo não é erro: responde 200 e a contagem não muda.
+- Da mesma forma, descurtir um post que o usuário não curtiu responde 200 sem mudar nada.
 - O autor pode curtir o próprio post.
 
 Os parâmetros `id` e `page` aceitam apenas inteiros decimais positivos (`1`, `2`, `42`). Valores como `0`, `-1`, `01`, `1.5` ou `0x10` retornam 400.
@@ -214,7 +216,7 @@ Cada camada tem uma responsabilidade só (SRP):
 
 - **Controller:** cuida do HTTP. Valida `body`, `params` e `query` com Zod, chama o use case e **delega a montagem do corpo da resposta** aos mappers de DTO de saída.
 - **DTOs de saída:** descrevem o JSON da API em `src/dtos/`: `PostOutputDTO` e `PostListOutputDTO` (posts), `LikesOutputDTO` (likes) e `AuthOutputDTO` (cadastro e login). Os mappers (`toPostOutputDTO`, `toPostListOutputDTO`, `toLikesOutputDTO`, `toAuthOutputDTO`) são funções puras que escolhem os campos expostos (o hash da senha nunca sai), convertem datas para ISO e montam o envelope `{ data, meta }` da listagem.
-- **Use cases:** cada operação é uma classe própria que implementa a interface `UseCase<Input, Output>`, com um único método `execute`. Posts: `ListPostsUseCase`, `GetPostUseCase`, `CreatePostUseCase`, `UpdatePostUseCase` e `DeletePostUseCase`. Likes: `LikePostUseCase`. Auth: `RegisterUseCase`, `LoginUseCase` e `FindUserByTokenUseCase`. Concentram as regras de negócio (posse do post, paginação, cadastro e login, erros 401/403/404/409), devolvem dados de domínio e não conhecem Express, ORM nem bibliotecas de criptografia.
+- **Use cases:** cada operação é uma classe própria que implementa a interface `UseCase<Input, Output>`, com um único método `execute`. Posts: `ListPostsUseCase`, `GetPostUseCase`, `CreatePostUseCase`, `UpdatePostUseCase` e `DeletePostUseCase`. Likes: `LikePostUseCase` e `UnlikePostUseCase`. Auth: `RegisterUseCase`, `LoginUseCase` e `FindUserByTokenUseCase`. Concentram as regras de negócio (posse do post, paginação, cadastro e login, erros 401/403/404/409), devolvem dados de domínio e não conhecem Express, ORM nem bibliotecas de criptografia.
 - **Repository:** é a interface de persistência que os use cases usam (`PostRepository`, `LikeRepository`, `UserRepository`).
 - **Adapter Drizzle:** implementa o repository com Drizzle (`DrizzlePostRepository`, `DrizzleLikeRepository`, `DrizzleUserRepository`). Detalhes do banco ficam só aqui, como os códigos de erro do Postgres `23505` (unicidade, e-mail duplicado) e `23503` (chave estrangeira, like em post inexistente) e o `ON CONFLICT DO NOTHING` que torna o like idempotente.
 - **Utils:** interfaces de funções auxiliares usadas pelos use cases de auth (`PasswordHasher`, `TokenGenerator`) e seus adapters (`BcryptPasswordHasher`, `CryptoTokenGenerator`). O custo do bcrypt e o hash fictício que protege o login contra timing attack ficam no adapter.
