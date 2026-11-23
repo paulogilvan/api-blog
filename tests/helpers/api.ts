@@ -40,3 +40,23 @@ export async function likePost(app: Express, token: string, postId: number) {
     .send();
   return response.body as { likes: number };
 }
+
+export type CreatedReply = {
+  id: number;
+  content: string;
+  createdAt: string;
+  author: { id: number; name: string };
+};
+
+export async function createReply(
+  app: Express,
+  token: string,
+  postId: number,
+  body = { content: 'Nice post!' },
+) {
+  const response = await request(app)
+    .post(`/api/posts/${postId}/replies`)
+    .set('Authorization', `Bearer ${token}`)
+    .send(body);
+  return response.body as CreatedReply;
+}

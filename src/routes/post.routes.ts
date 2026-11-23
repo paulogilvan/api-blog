@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { likePostController, unlikePostController } from '../controllers/like.controller.ts';
-import { createReplyController } from '../controllers/reply.controller.ts';
+import { createReplyController, deleteReplyController } from '../controllers/reply.controller.ts';
 import {
   createPostController,
   deletePostController,
@@ -27,3 +27,4 @@ postRoutes.delete('/:id', ensureAuthenticated, deletePostController);
 postRoutes.post('/:id/likes', ensureAuthenticated, likePostController);
 postRoutes.delete('/:id/likes', ensureAuthenticated, unlikePostController);
 postRoutes.post('/:id/replies', ensureAuthenticated, createReplyController);
+postRoutes.delete('/:id/replies/:replyId', ensureAuthenticated, deleteReplyController);

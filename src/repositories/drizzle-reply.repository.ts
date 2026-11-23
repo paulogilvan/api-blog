@@ -1,3 +1,4 @@
+import { and, eq } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import { replies } from '../db/schema.ts';
 import { isPgError, PG_FOREIGN_KEY_VIOLATION } from './pg-error.ts';
@@ -24,5 +25,24 @@ export class DrizzleReplyRepository implements ReplyRepository {
       if (isPgError(error, PG_FOREIGN_KEY_VIOLATION, POST_FK_CONSTRAINT)) return null;
       throw error;
     }
+  }
+
+  async findAuthorId({ replyId, postId }: { replyId: number; postId: number }) {
+    const [reply] = await db
+      .select({ authorId: replies.authorId })
+      .from(replies)
+      .where(and(eq(replies.id, replyId), eq(replies.postId, postId)))
+      .limit(1);
+
+    return reply?.authorId ?? null;
+  }
+
+  async delete({ replyId, postId }: { replyId: number; postId: number }) {
+    const deleted = await db
+      .delete(replies)
+      .where(and(eq(replies.id, replyId), eq(replies.postId, postId)))
+      .returning({ id: replies.id });
+
+    return deleted.length > 0;
   }
 }

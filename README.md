@@ -6,7 +6,7 @@ API REST de blog com autenticação por token de sessão e gestão de posts, esc
 - Usuários autenticados podem **criar, editar e apagar apenas os próprios posts**.
 - A **listagem** (paginada) e a **consulta individual** de posts são públicas.
 - Usuários autenticados podem **curtir e descurtir** posts.
-- Usuários autenticados podem **responder** (reply) posts.
+- Usuários autenticados podem **responder** (reply) posts e **apagar apenas as próprias replies**.
 
 ## Stack
 
@@ -96,6 +96,7 @@ Authorization: Bearer <token>
 | `POST` | `/api/posts/:id/likes` | Sim | Curte um post |
 | `DELETE` | `/api/posts/:id/likes` | Sim | Descurte um post |
 | `POST` | `/api/posts/:id/replies` | Sim | Responde um post |
+| `DELETE` | `/api/posts/:id/replies/:replyId` | Sim | Apaga a própria reply |
 | `GET` | `/api/health` | Não | Status da API e do banco |
 
 ### Autenticação
@@ -206,7 +207,12 @@ curl -X POST http://localhost:3333/api/posts/1/replies \
 - Replies são planas: sempre respondem o post, nunca outra reply.
 - O autor do post também pode responder, e o mesmo usuário pode responder várias vezes.
 
-Os parâmetros `id` e `page` aceitam apenas inteiros decimais positivos (`1`, `2`, `42`). Valores como `0`, `-1`, `01`, `1.5` ou `0x10` retornam 400.
+**`DELETE /api/posts/:id/replies/:replyId`** apaga a reply de vez. Responde **204**, sem corpo.
+
+- Só o **autor da reply** pode apagá-la. Qualquer outro usuário recebe **403**, inclusive o dono do post.
+- Reply inexistente, ou que pertence a outro post que não o `:id` da URL, retorna **404**. A posse só é verificada depois de confirmar que a reply existe naquele post.
+
+Os parâmetros `id`, `replyId` e `page` aceitam apenas inteiros decimais positivos (`1`, `2`, `42`). Valores como `0`, `-1`, `01`, `1.5` ou `0x10` retornam 400.
 
 ### Erros
 
@@ -248,7 +254,7 @@ Cada camada tem uma responsabilidade só (SRP):
 
 - **Controller:** cuida do HTTP. Valida `body`, `params` e `query` com Zod, chama o use case e **delega a montagem do corpo da resposta** aos mappers de DTO de saída.
 - **DTOs de saída:** descrevem o JSON da API em `src/dtos/`: `PostOutputDTO`, `PostDetailOutputDTO` e `PostListOutputDTO` (posts), `LikesOutputDTO` (likes), `ReplyOutputDTO` (replies) e `AuthOutputDTO` (cadastro e login). Os mappers (`toPostOutputDTO`, `toPostDetailOutputDTO`, `toPostListOutputDTO`, `toLikesOutputDTO`, `toReplyOutputDTO`, `toAuthOutputDTO`) são funções puras que escolhem os campos expostos (o hash da senha nunca sai), convertem datas para ISO e montam o envelope `{ data, meta }` da listagem.
-- **Use cases:** cada operação é uma classe própria que implementa a interface `UseCase<Input, Output>`, com um único método `execute`. Posts: `ListPostsUseCase`, `GetPostUseCase`, `CreatePostUseCase`, `UpdatePostUseCase` e `DeletePostUseCase`. Likes: `LikePostUseCase` e `UnlikePostUseCase`. Replies: `CreateReplyUseCase`. Auth: `RegisterUseCase`, `LoginUseCase` e `FindUserByTokenUseCase`. Concentram as regras de negócio (posse do post, paginação, cadastro e login, erros 401/403/404/409), devolvem dados de domínio e não conhecem Express, ORM nem bibliotecas de criptografia.
+- **Use cases:** cada operação é uma classe própria que implementa a interface `UseCase<Input, Output>`, com um único método `execute`. Posts: `ListPostsUseCase`, `GetPostUseCase`, `CreatePostUseCase`, `UpdatePostUseCase` e `DeletePostUseCase`. Likes: `LikePostUseCase` e `UnlikePostUseCase`. Replies: `CreateReplyUseCase` e `DeleteReplyUseCase`. Auth: `RegisterUseCase`, `LoginUseCase` e `FindUserByTokenUseCase`. Concentram as regras de negócio (posse do post e da reply, paginação, cadastro e login, erros 401/403/404/409), devolvem dados de domínio e não conhecem Express, ORM nem bibliotecas de criptografia.
 - **Repository:** é a interface de persistência que os use cases usam (`PostRepository`, `LikeRepository`, `ReplyRepository`, `UserRepository`).
 - **Adapter Drizzle:** implementa o repository com Drizzle (`DrizzlePostRepository`, `DrizzleLikeRepository`, `DrizzleReplyRepository`, `DrizzleUserRepository`). Detalhes do banco ficam só aqui, como os códigos de erro do Postgres `23505` (unicidade, e-mail duplicado) e `23503` (chave estrangeira, like ou reply em post inexistente) e o `ON CONFLICT DO NOTHING` que torna o like idempotente.
 - **Utils:** interfaces de funções auxiliares usadas pelos use cases de auth (`PasswordHasher`, `TokenGenerator`) e seus adapters (`BcryptPasswordHasher`, `CryptoTokenGenerator`). O custo do bcrypt e o hash fictício que protege o login contra timing attack ficam no adapter.

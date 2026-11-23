@@ -6,11 +6,19 @@ import type {
   ReplyRepository,
   ReplyWithAuthorRecord,
 } from '../repositories/reply.repository.ts';
-import { createReplyBodySchema, createReplyParamsSchema } from '../schemas/reply.schema.ts';
+import {
+  createReplyBodySchema,
+  createReplyParamsSchema,
+  deleteReplyParamsSchema,
+} from '../schemas/reply.schema.ts';
 import {
   CreateReplyUseCase,
   type CreateReplyInput,
 } from '../use-cases/replies/create-reply.use-case.ts';
+import {
+  DeleteReplyUseCase,
+  type DeleteReplyInput,
+} from '../use-cases/replies/delete-reply.use-case.ts';
 import type { UseCase } from '../use-cases/use-case.ts';
 
 // Composição: as implementações concretas são ligadas uma única vez, fora dos handlers.
@@ -19,6 +27,7 @@ const replyRepository: ReplyRepository = new DrizzleReplyRepository();
 const createReply: UseCase<CreateReplyInput, ReplyWithAuthorRecord> = new CreateReplyUseCase(
   replyRepository,
 );
+const deleteReply: UseCase<DeleteReplyInput, void> = new DeleteReplyUseCase(replyRepository);
 
 export const createReplyController: RequestHandler = async (req, res) => {
   const user = getAuthenticatedUser(req);
@@ -26,4 +35,11 @@ export const createReplyController: RequestHandler = async (req, res) => {
   const data = createReplyBodySchema.parse(req.body);
   const reply = await createReply.execute({ postId: id, data, author: user });
   res.status(201).json(toReplyOutputDTO(reply));
+};
+
+export const deleteReplyController: RequestHandler = async (req, res) => {
+  const user = getAuthenticatedUser(req);
+  const { id, replyId } = deleteReplyParamsSchema.parse(req.params);
+  await deleteReply.execute({ postId: id, replyId, userId: user.id });
+  res.status(204).end();
 };
