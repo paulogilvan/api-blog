@@ -14,7 +14,7 @@ API REST de blog em **TypeScript + Express 5 + Drizzle ORM + PostgreSQL 17**.
 - Replies: usuário autenticado responde posts e só o autor da reply a apaga; as replies são públicas e aparecem no post individual.
 - Escopo fechado em **auth + posts + likes + replies** (sem logout, perfil, troca de senha, admin, thread de replies, like em reply, paginação ou edição de replies — ver `docs/api.md`).
 
-Idioma: código (identificadores, mensagens de erro da API) em **inglês**; comentários, docs e mensagens de commit em **português**.
+Idioma: código (identificadores, mensagens de erro da API) e mensagens de commit em **inglês**; comentários e docs em **português**.
 
 ## Comandos
 
@@ -137,5 +137,5 @@ Route → [ensureAuthenticated] → Controller → Use Case → Repository / Uti
 
 ## Git
 
-- Branch principal: `main`. Commits no estilo Conventional Commits em português, com escopo: `feat(posts): ...`, `refactor(auth): ...`, `docs: ...`, `chore: ...`.
+- Branch principal: `main`. Commits no estilo Conventional Commits em inglês, com escopo: `feat(posts): ...`, `refactor(auth): ...`, `docs: ...`, `chore: ...`.
 - Ao mudar arquitetura, endpoints ou comportamento visível, atualize também o `README.md` (e este arquivo, se as convenções mudarem).
