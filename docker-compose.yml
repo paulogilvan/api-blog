@@ -35,6 +35,39 @@ services:
       timeout: 5s
       retries: 10
 
+  # SMTP falso de desenvolvimento: captura os e-mails (nada sai de verdade).
+  # Caixa de entrada em http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:v1.27
+    container_name: api-blog-mailpit
+    restart: unless-stopped
+    environment: &mailpit_env
+      # Aceita qualquer usuário/senha (ou nenhum) sem TLS: SMTP_USER/SMTP_PASS são opcionais.
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+      # Mantém só os e-mails mais recentes.
+      MP_MAX_MESSAGES: "500"
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # UI web + API HTTP
+    healthcheck: &mailpit_healthcheck
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Mailpit separado para os testes: a suíte limpa a caixa a cada teste sem apagar
+  # os e-mails do ambiente de desenvolvimento. API HTTP usada pelos testes em :8026.
+  mailpit_test:
+    image: axllent/mailpit:v1.27
+    container_name: api-blog-mailpit-test
+    restart: unless-stopped
+    environment: *mailpit_env
+    ports:
+      - "1026:1025" # SMTP
+      - "8026:8025" # UI web + API HTTP
+    healthcheck: *mailpit_healthcheck
+
 volumes:
   db_data:
   db_test_data:

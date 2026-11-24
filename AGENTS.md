@@ -170,6 +170,12 @@ Princípio: **Multer só na borda; o use case recebe um `Buffer`; Sharp processa
 
 ## E-mail (notificação de nova reply)
 
+Estado: a **infraestrutura está pronta** (Mailpit no compose, `SMTP_*` validadas no `env.ts`, helper `tests/helpers/mailpit.ts`); falta o `Mailer`, o Nodemailer e o envio no `CreateReplyUseCase`.
+
+- Infra:
+  - `docker-compose.yml` tem `mailpit` (dev) e `mailpit_test` (testes), imagem `axllent/mailpit` com tag fixa, healthcheck `mailpit readyz` (necessário para o `docker compose up --wait` do `db:up`) e `MP_SMTP_AUTH_ACCEPT_ANY`/`MP_SMTP_AUTH_ALLOW_INSECURE` para aceitar SMTP com ou sem credenciais. Sem volume: os e-mails são descartáveis.
+  - `env.ts`: `SMTP_HOST` e `SMTP_PORT` (1..65535) obrigatórios; `SMTP_FROM` obrigatório, como `email` ou `Nome <email>`; `SMTP_USER`/`SMTP_PASS` opcionais (vazio = ausente), mas **em par**. O schema é exportado (`envSchema`) e coberto por `tests/unit/env.spec.ts`.
+  - `MAILPIT_API_URL` existe só no `.env.test` e é usada só pelo helper de testes (a app nunca fala com a API do Mailpit, só com o SMTP).
 - Interface `Mailer` (`src/utils/mailer.ts`): `send({ to, subject, text, html }): Promise<void>`. Adapter `NodemailerMailer` cria **um** transporter no ponto de composição a partir de `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` (+ `SMTP_USER`/`SMTP_PASS` opcionais). Nenhum outro arquivo importa `nodemailer`.
 - `CreateReplyUseCase` recebe `Mailer` pelo construtor. Fluxo:
   1. Persistir a reply (como hoje).
@@ -186,13 +192,13 @@ Princípio: **Multer só na borda; o use case recebe um `Buffer`; Sharp processa
 - `fileParallelism: false` — arquivos rodam em série porque compartilham o banco.
 - Padrão dos specs de integração: `const app = createApp()`, `beforeEach(resetDatabase)` (TRUNCATE com `RESTART IDENTITY`), `afterAll(() => pool.end())`. Helpers em `tests/helpers/api.ts` (`registerUser`, `createPost`, `likePost`, `createReply`, `defaultUser`).
 - **Uploads nos testes**: `.env.test` aponta `UPLOAD_DIR` para um diretório próprio (ex.: `tmp/uploads-test`), limpo no `beforeEach`. Helpers em `tests/helpers/uploads.ts` (`resetUploads`, `listUploads`, `makeImage`, `readUploadMetadata`): imagens de teste são geradas em memória com Sharp e enviadas com `.attach('image', buffer, 'photo.png')` do Supertest. **Nunca abra arquivo gravado com `sharp(caminho)` nos testes**: o cache do libvips mantém o arquivo aberto e, no Windows, o `rm` seguinte falha com `EBUSY` — leia para buffer (`readUploadMetadata`). Cubra: formato inválido (texto renomeado para `.png`) → 400, arquivo grande demais → 400, saída é WebP com as dimensões do preset, arquivo antigo removido na troca, arquivo removido ao apagar o post, nada sobra no disco quando o banco falha/post não existe.
-- **E-mail nos testes**: contra o **Mailpit real** (`mailpit_test`, SMTP 1026, API HTTP 8026), sem mock do Nodemailer nos testes de integração. `beforeEach` limpa a caixa (`DELETE http://localhost:8026/api/v1/messages`); helper em `tests/helpers/mailpit.ts` consulta `GET /api/v1/messages` / `GET /api/v1/message/{ID}` com polling curto. Cubra: e-mail chega ao dono do post, não é enviado em auto-reply, HTML escapado, e a reply ainda retorna 201 se o SMTP estiver fora (use um `Mailer` que falha injetado num teste unitário do use case).
+- **E-mail nos testes**: contra o **Mailpit real** (`mailpit_test`, SMTP 1026, API HTTP 8026), sem mock do Nodemailer nos testes de integração. A caixa é limpa **uma vez por execução** (`clearMailbox()` no `tests/global-setup.ts`), para os e-mails da última execução ficarem visíveis na UI (http://localhost:8026); **não** chame `clearMailbox()` nos specs. O isolamento entre testes é por marca: `markMailbox()` no `beforeEach` guarda a mensagem mais recente, e `listMessages()`/`waitForMessage({ to })` só enxergam o que chegou depois dela. Helper `tests/helpers/mailpit.ts`: `waitForMessage({ to })` (polling curto, erro claro se nada chegar), `getMessage(id)` (`Text`/`HTML` completos) e `listMessages()` — para afirmar que **nada** foi enviado, espere um pouco e cheque `listMessages()` vazio. `tests/integration/mailpit.spec.ts` valida a infra (SMTP do `.env.test` respondendo e o helper). Cubra: e-mail chega ao dono do post, não é enviado em auto-reply, HTML escapado, e a reply ainda retorna 201 se o SMTP estiver fora (use um `Mailer` que falha injetado num teste unitário do use case).
 - Testes descrevem comportamento em inglês. O projeto foi construído com **TDD**: ao adicionar/alterar comportamento, escreva ou atualize o teste de integração correspondente.
 - Antes de concluir uma tarefa: `npm run typecheck` e `npm test` (com `npm run db:up` se os containers não estiverem rodando).
 
 ## Arquivos e contexto extra
 
-- `.env` (gitignored) para dev; `.env.example` é o modelo; `.env.test` **é commitado** de propósito. Ao adicionar `UPLOAD_DIR` e `SMTP_*` ao `env.ts`, atualize os três (dev aponta para `mailpit` 1025, teste para `mailpit_test` 1026).
+- `.env` (gitignored) para dev; `.env.example` é o modelo; `.env.test` **é commitado** de propósito. Ao adicionar variáveis ao `env.ts`, atualize os três (o SMTP de dev aponta para `mailpit` 1025, o de teste para `mailpit_test` 1026).
 - `uploads/` e `tmp/` devem estar no `.gitignore`.
 - `docs/` é **gitignored** e contém material de planejamento local: `project-prd.md` (requisitos), `braindump.md` (ideia original), `api.md` (especificação da API). Consulte se existir, mas não dependa dele.
 - `dist/` é saída de build (gitignored).

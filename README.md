@@ -22,6 +22,7 @@ API REST de blog com autenticação por token de sessão e gestão de posts, esc
 | Banco | PostgreSQL 17 (Docker Compose) |
 | Hash de senha | bcrypt |
 | Upload / imagens | Multer (multipart em memória) + Sharp (redimensiona e converte para WebP) |
+| E-mail (dev/teste) | Mailpit (SMTP falso via Docker Compose) |
 | Testes | Vitest + Supertest (integração com banco real) |
 
 ## Requisitos
@@ -38,7 +39,8 @@ npm install
 # 2. Criar o arquivo de ambiente
 cp .env.example .env
 
-# 3. Subir os bancos (aplicação na porta 6000, testes na porta 6001)
+# 3. Subir os containers: bancos (aplicação na porta 6000, testes na 6001)
+#    e Mailpit (dev: SMTP 1025 / caixa em http://localhost:8025; testes: SMTP 1026 / 8026)
 npm run db:up
 
 # 4. Aplicar as migrations no banco da aplicação
@@ -63,8 +65,14 @@ curl http://localhost:3333/api/health
 | `PORT` | Porta HTTP | `3333` |
 | `DATABASE_URL` | URL de conexão do PostgreSQL | obrigatória |
 | `UPLOAD_DIR` | Pasta onde as imagens enviadas são gravadas (servida em `/uploads`) | `uploads` |
+| `SMTP_HOST` | Host do servidor SMTP | obrigatória |
+| `SMTP_PORT` | Porta do servidor SMTP (1 a 65535) | obrigatória |
+| `SMTP_FROM` | Remetente, no formato `email` ou `Nome <email>` | obrigatória |
+| `SMTP_USER` / `SMTP_PASS` | Credenciais SMTP. Opcionais, mas precisam vir juntas | — |
 
 Os valores são validados com Zod ao iniciar. Se algum for inválido, a aplicação não sobe.
+
+Em desenvolvimento, o SMTP é o **Mailpit** do Docker Compose (`localhost:1025`, sem credenciais): nenhum e-mail sai de verdade, e todos ficam visíveis em **http://localhost:8025**.
 
 ## Scripts
 
@@ -76,7 +84,7 @@ Os valores são validados com Zod ao iniciar. Se algum for inválido, a aplicaç
 | `npm run typecheck` | Verifica os tipos sem gerar arquivos |
 | `npm test` | Roda a suíte de testes uma vez |
 | `npm run test:watch` | Roda os testes em modo watch |
-| `npm run db:up` / `db:down` | Sobe ou derruba os containers do Postgres |
+| `npm run db:up` / `db:down` | Sobe ou derruba os containers (Postgres e Mailpit, de dev e de teste) |
 | `npm run db:generate` | Gera uma migration a partir de `src/db/schema.ts` |
 | `npm run db:migrate` | Aplica as migrations no banco da aplicação |
 | `npm run db:studio` | Abre o Drizzle Studio |
@@ -244,6 +252,7 @@ curl -X POST http://localhost:3333/api/posts/1/replies \
 
 - Replies são planas: sempre respondem o post, nunca outra reply.
 - O autor do post também pode responder, e o mesmo usuário pode responder várias vezes.
+
 
 **`DELETE /api/posts/:id/replies/:replyId`** apaga a reply de vez. Responde **204**, sem corpo.
 
@@ -424,4 +433,8 @@ npm run db:up   # se os containers ainda não estiverem rodando
 npm test
 ```
 
-A configuração do banco de teste fica em `.env.test`. Os uploads dos testes vão para `tmp/uploads-test` (limpo entre os testes), e as imagens de teste são geradas em memória com Sharp.
+Os e-mails dos testes vão para um **Mailpit separado** (`mailpit_test`, SMTP na porta 1026 e API HTTP na 8026), consultado pela API dele em `tests/helpers/mailpit.ts`. Assim a suíte nunca mexe nos e-mails do Mailpit de desenvolvimento.
+
+A caixa de teste é limpa **uma vez, no início de cada execução**, e não entre os testes. Depois de `npm test`, os e-mails enviados pela suíte ficam visíveis em **http://localhost:8026** até a próxima execução. Cada teste só enxerga as mensagens que chegaram depois do seu `beforeEach` (`markMailbox()`), então os testes continuam isolados.
+
+A configuração do banco e do SMTP de teste fica em `.env.test`. Os uploads dos testes vão para `tmp/uploads-test` (limpo entre os testes), e as imagens de teste são geradas em memória com Sharp.
