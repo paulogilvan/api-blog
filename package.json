@@ -14,7 +14,7 @@
     "db:down": "docker compose down",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:migrate:test": "dotenv -e .env.test -- drizzle-kit migrate",
+    "db:migrate:test": "dotenv run -f .env.test -- drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio"
   },
