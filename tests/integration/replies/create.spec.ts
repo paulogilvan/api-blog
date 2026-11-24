@@ -6,6 +6,7 @@ import { db, pool } from '../../../src/db/index.ts';
 import { replies } from '../../../src/db/schema.ts';
 import { createPost, registerUser } from '../../helpers/api.ts';
 import { resetDatabase } from '../../helpers/database.ts';
+import { getMessage, listMessages, markMailbox, waitForMessage } from '../../helpers/mailpit.ts';
 
 const app = createApp();
 
@@ -24,6 +25,7 @@ async function storedReplies() {
 describe('POST /api/posts/:id/replies', () => {
   beforeEach(async () => {
     await resetDatabase();
+    await markMailbox();
   });
 
   afterAll(async () => {
@@ -126,6 +128,103 @@ describe('POST /api/posts/:id/replies', () => {
 
       expect(JSON.stringify(response.body)).not.toContain(user.email);
       expect(response.body.author).toEqual({ id: user.id, name: user.name });
+    });
+  });
+
+  describe('e-mail to the post author', () => {
+    it('sends the new reply e-mail to the post author', async () => {
+      const author = await registerUser(app);
+      const replier = await registerUser(app, { name: 'Jane Roe', email: 'jane@example.com' });
+      const post = await createPost(app, author.token, {
+        title: 'My first post',
+        content: 'Hello',
+      });
+
+      const response = await createReply(replier.token, post.id, { content: 'Great post!' });
+
+      expect(response.status).toBe(201);
+      const summary = await waitForMessage({ to: author.user.email });
+      const message = await getMessage(summary.ID);
+      expect(message.Subject).toBe('New reply on "My first post"');
+      expect(message.From.Address).toBe('no-reply@blog.local');
+      expect(message.To.map((to) => to.Address)).toEqual([author.user.email]);
+      for (const body of [message.Text, message.HTML]) {
+        expect(body).toContain('Jane Roe');
+        expect(body).toContain('My first post');
+        expect(body).toContain('Great post!');
+      }
+    });
+
+    it('does not send an e-mail when the author replies to their own post', async () => {
+      const author = await registerUser(app);
+      const post = await createPost(app, author.token);
+
+      const response = await createReply(author.token, post.id, validReply);
+
+      expect(response.status).toBe(201);
+      // O envio é aguardado antes da resposta; a pausa só cobre a gravação no Mailpit.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(await listMessages()).toEqual([]);
+    });
+
+    it('sends one e-mail per reply', async () => {
+      const author = await registerUser(app);
+      const replier = await registerUser(app, { email: 'jane@example.com' });
+      const post = await createPost(app, author.token);
+
+      await createReply(replier.token, post.id, { content: 'First' });
+      await createReply(replier.token, post.id, { content: 'Second' });
+
+      await waitForMessage({ to: author.user.email });
+      const messages = await listMessages();
+      expect(messages).toHaveLength(2);
+      expect(messages.every((m) => m.To[0].Address === author.user.email)).toBe(true);
+    });
+
+    it('escapes user-provided text in the html version', async () => {
+      const author = await registerUser(app);
+      const replier = await registerUser(app, {
+        name: '<script>alert(1)</script>',
+        email: 'jane@example.com',
+      });
+      const post = await createPost(app, author.token, {
+        title: 'Tom & <b>Jerry</b>',
+        content: 'x',
+      });
+
+      await createReply(replier.token, post.id, { content: '<img src=x onerror=alert(1)>' });
+
+      const message = await getMessage((await waitForMessage({ to: author.user.email })).ID);
+      expect(message.HTML).not.toContain('<script>');
+      expect(message.HTML).not.toContain('<img');
+      expect(message.HTML).not.toContain('<b>Jerry');
+      expect(message.HTML).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+      expect(message.HTML).toContain('Tom &amp; &lt;b&gt;Jerry&lt;/b&gt;');
+      expect(message.HTML).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    });
+
+    it('does not include the replier e-mail address in the message', async () => {
+      const author = await registerUser(app);
+      const replier = await registerUser(app, { email: 'jane@example.com' });
+      const post = await createPost(app, author.token);
+
+      await createReply(replier.token, post.id, validReply);
+
+      const message = await getMessage((await waitForMessage({ to: author.user.email })).ID);
+      expect(message.Text).not.toContain('jane@example.com');
+      expect(message.HTML).not.toContain('jane@example.com');
+    });
+
+    it('does not send an e-mail when the reply is rejected', async () => {
+      const author = await registerUser(app);
+      const replier = await registerUser(app, { email: 'jane@example.com' });
+      const post = await createPost(app, author.token);
+
+      await createReply(replier.token, post.id, { content: '' });
+      await createReply(replier.token, 999, validReply);
+
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(await listMessages()).toEqual([]);
     });
   });
 

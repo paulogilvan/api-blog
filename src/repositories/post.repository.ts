@@ -21,6 +21,13 @@ export interface PostRepository {
   }): Promise<{ rows: PostWithAuthorRecord[]; total: number }>;
   findById(id: number): Promise<PostWithAuthorRecord | null>;
   findAuthorId(id: number): Promise<number | null>;
+  /**
+   * Título do post e contato do autor, para a notificação de nova reply. É o único ponto que
+   * lê o e-mail do autor de um post: ele nunca vai para os DTOs. `null` se o post não existe.
+   */
+  findWithAuthorContact(
+    id: number,
+  ): Promise<{ title: string; author: { id: number; name: string; email: string } } | null>;
   create(data: { title: string; content: string; authorId: number }): Promise<PostRecord>;
   update(
     id: number,

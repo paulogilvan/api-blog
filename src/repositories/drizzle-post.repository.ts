@@ -86,6 +86,26 @@ export class DrizzlePostRepository implements PostRepository {
     return post?.authorId ?? null;
   }
 
+  async findWithAuthorContact(id: number) {
+    const [row] = await db
+      .select({
+        title: posts.title,
+        authorId: users.id,
+        authorName: users.name,
+        authorEmail: users.email,
+      })
+      .from(posts)
+      .innerJoin(users, eq(posts.authorId, users.id))
+      .where(eq(posts.id, id))
+      .limit(1);
+
+    if (!row) return null;
+    return {
+      title: row.title,
+      author: { id: row.authorId, name: row.authorName, email: row.authorEmail },
+    };
+  }
+
   async create(data: { title: string; content: string; authorId: number }) {
     const [post] = await db.insert(posts).values(data).returning(postColumns);
     return post;

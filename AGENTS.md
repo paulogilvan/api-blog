@@ -13,7 +13,7 @@ API REST de blog em **TypeScript + Express 5 + Drizzle ORM + PostgreSQL 17**.
 - Likes: usuário autenticado curte/descurte posts; a contagem é pública.
 - Replies: usuário autenticado responde posts e só o autor da reply a apaga; as replies são públicas e aparecem no post individual.
 - Imagens: foto do post e avatar do usuário, enviados via `multipart/form-data`, processados com **Sharp** e gravados em disco; o banco guarda só o caminho relativo. Ver [Uploads de imagem](#uploads-de-imagem-foto-do-post-e-avatar).
-- Notificação por e-mail (em implementação): o autor do post recebe um e-mail quando alguém responde ao post dele. Envio via **Nodemailer**; em dev/teste o SMTP é o **Mailpit**. Ver [E-mail](#e-mail-notificação-de-nova-reply).
+- Notificação por e-mail: o autor do post recebe um e-mail quando alguém responde ao post dele. Envio via **Nodemailer**; em dev/teste o SMTP é o **Mailpit**. Ver [E-mail](#e-mail-notificação-de-nova-reply).
 - Escopo fechado em **auth + posts + likes + replies + imagens + e-mail de nova reply** (sem logout, perfil além de `GET /me` e do avatar, troca de senha, admin, thread de replies, like em reply, paginação ou edição de replies, nem outros e-mails — ver `docs/api.md`).
 
 Idioma: código (identificadores, mensagens de erro da API) e mensagens de commit em **inglês**; comentários e docs em **português**.
@@ -53,6 +53,7 @@ Route → [ensureAuthenticated] → [upload (Multer)] → Controller → Use Cas
 | `src/use-cases/` | Regras de negócio. Uma classe por operação implementando `UseCase<Input, Output>` (`execute`). Lançam `AppError` |
 | `src/repositories/` | Interfaces (`PostRepository`, `LikeRepository`, `ReplyRepository`, `UserRepository`) + adapters `Drizzle*Repository`; `pg-error.ts` detecta códigos/constraints do Postgres |
 | `src/utils/` | Interfaces `PasswordHasher`, `TokenGenerator`, `ImageProcessor`, `FileStorage`, `Mailer` + adapters bcrypt / `node:crypto` / Sharp / disco (`node:fs/promises`) / Nodemailer |
+| `src/emails/` | Conteúdo dos e-mails em funções puras (`buildNewReplyEmail`) + `escapeHtml` |
 | `src/dtos/` | Tipos de saída da API + mappers puros (`toPostOutputDTO`, `toPostDetailOutputDTO`, `toPostListOutputDTO`, `toLikesOutputDTO`, `toReplyOutputDTO`, `toAuthOutputDTO`) |
 | `src/middlewares/` | `ensureAuthenticated` (+ `getAuthenticatedUser(req)`), `optionalAuthentication` (+ `getOptionalUser(req)`), `errorHandler`/`notFoundHandler` e `upload.ts` (instâncias do Multer — **único lugar do projeto que importa `multer`**) |
 | `src/errors/app-error.ts` | `AppError(code, message, details?)`; o status HTTP sai do `code` |
@@ -170,7 +171,7 @@ Princípio: **Multer só na borda; o use case recebe um `Buffer`; Sharp processa
 
 ## E-mail (notificação de nova reply)
 
-Estado: a **infraestrutura está pronta** (Mailpit no compose, `SMTP_*` validadas no `env.ts`, helper `tests/helpers/mailpit.ts`); falta o `Mailer`, o Nodemailer e o envio no `CreateReplyUseCase`.
+Implementado: `Mailer` + `NodemailerMailer` (`src/utils/`), `buildNewReplyEmail` + `escapeHtml` (`src/emails/`), `PostRepository.findWithAuthorContact` e o envio em `CreateReplyUseCase`.
 
 - Infra:
   - `docker-compose.yml` tem `mailpit` (dev) e `mailpit_test` (testes), imagem `axllent/mailpit` com tag fixa, healthcheck `mailpit readyz` (necessário para o `docker compose up --wait` do `db:up`) e `MP_SMTP_AUTH_ACCEPT_ANY`/`MP_SMTP_AUTH_ALLOW_INSECURE` para aceitar SMTP com ou sem credenciais. Sem volume: os e-mails são descartáveis.
@@ -182,6 +183,8 @@ Estado: a **infraestrutura está pronta** (Mailpit no compose, `SMTP_*` validada
   2. Buscar destinatário com um método de repository que retorna `{ email, name }` do autor do post (o e-mail é usado só aqui; continua **nunca** saindo nos DTOs).
   3. **Não enviar se o autor da reply for o próprio dono do post.**
   4. Enviar com `await` dentro de `try/catch`: **falha de e-mail nunca falha a requisição** (a reply já foi criada → 201). Logar o erro sem destinatário nem conteúdo.
+  - O `try/catch` cobre também a busca do destinatário (passos 2–4). O log leva só `postId`, `replyId` e o `code`/`name` do erro, nunca `error.message`: mensagens de SMTP costumam citar o endereço.
+  - Como o envio segura a resposta, o transporter tem timeouts curtos (conexão/saudação 5 s, socket 10 s) no lugar dos ~2 min padrão do Nodemailer.
 - Conteúdo: assunto e corpo em inglês (como as mensagens da API), com título do post, nome de quem respondeu e trecho da reply. No `html`, **escapar** todo texto vindo do usuário (título, nome, conteúdo); manter também a versão `text`. Montar o e-mail numa função pura (ex.: `src/emails/new-reply.email.ts`) testável isoladamente.
 - Não colocar tokens, hashes ou e-mails de terceiros no corpo nem nos logs.
 

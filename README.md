@@ -7,6 +7,7 @@ API REST de blog com autenticação por token de sessão e gestão de posts, esc
 - A **listagem** (paginada) e a **consulta individual** de posts são públicas.
 - Usuários autenticados podem **curtir e descurtir** posts.
 - Usuários autenticados podem **responder** (reply) posts e **apagar apenas as próprias replies**.
+- O autor do post **recebe um e-mail** a cada nova reply de outra pessoa.
 - Usuários autenticados podem **consultar os próprios dados** (`GET /api/me`).
 - Usuários autenticados podem **enviar ou trocar o próprio avatar** (imagem redimensionada para 200×200 e salva em disco).
 - O dono de um post pode **enviar ou trocar a imagem do post** (reduzida para no máximo 720p e salva em disco).
@@ -22,7 +23,7 @@ API REST de blog com autenticação por token de sessão e gestão de posts, esc
 | Banco | PostgreSQL 17 (Docker Compose) |
 | Hash de senha | bcrypt |
 | Upload / imagens | Multer (multipart em memória) + Sharp (redimensiona e converte para WebP) |
-| E-mail (dev/teste) | Mailpit (SMTP falso via Docker Compose) |
+| E-mail | Nodemailer (SMTP); em dev/teste, Mailpit (SMTP falso via Docker Compose) |
 | Testes | Vitest + Supertest (integração com banco real) |
 
 ## Requisitos
@@ -109,7 +110,7 @@ Authorization: Bearer <token>
 | `PUT` | `/api/posts/:id/image` | Sim | Envia ou troca a imagem do próprio post |
 | `POST` | `/api/posts/:id/likes` | Sim | Curte um post |
 | `DELETE` | `/api/posts/:id/likes` | Sim | Descurte um post |
-| `POST` | `/api/posts/:id/replies` | Sim | Responde um post |
+| `POST` | `/api/posts/:id/replies` | Sim | Responde um post (e avisa o autor por e-mail) |
 | `DELETE` | `/api/posts/:id/replies/:replyId` | Sim | Apaga a própria reply |
 | `GET` | `/api/me` | Sim | Retorna os dados do usuário logado |
 | `PUT` | `/api/me/avatar` | Sim | Envia ou troca o próprio avatar |
@@ -253,6 +254,12 @@ curl -X POST http://localhost:3333/api/posts/1/replies \
 - Replies são planas: sempre respondem o post, nunca outra reply.
 - O autor do post também pode responder, e o mesmo usuário pode responder várias vezes.
 
+**E-mail de nova reply:** depois de criar a reply, a API envia um e-mail ao **autor do post**, com o assunto `New reply on "<título do post>"`, o nome de quem respondeu, o título e o texto da reply (versões texto e HTML).
+
+- Não é enviado quando o próprio autor responde o post dele.
+- Uma falha no envio **não afeta a resposta**: a reply continua criada (201) e o erro só vai para o log, sem o destinatário nem o conteúdo.
+- Todo texto vindo de usuários (nomes, título e reply) é escapado no HTML. O e-mail de quem respondeu nunca aparece na mensagem.
+- Em desenvolvimento, os e-mails ficam em **http://localhost:8025** (Mailpit).
 
 **`DELETE /api/posts/:id/replies/:replyId`** apaga a reply de vez. Responde **204**, sem corpo.
 
@@ -371,7 +378,7 @@ Cada camada tem uma responsabilidade só (SRP):
 - **Use cases:** cada operação é uma classe própria que implementa a interface `UseCase<Input, Output>`, com um único método `execute`. Posts: `ListPostsUseCase`, `GetPostUseCase`, `CreatePostUseCase`, `UpdatePostUseCase`, `UpdatePostImageUseCase` e `DeletePostUseCase`. Likes: `LikePostUseCase` e `UnlikePostUseCase`. Replies: `CreateReplyUseCase` e `DeleteReplyUseCase`. Auth: `RegisterUseCase`, `LoginUseCase` e `FindUserByTokenUseCase`. Usuário: `GetMeUseCase` e `UpdateAvatarUseCase`. Concentram as regras de negócio (posse do post e da reply, paginação, cadastro e login, erros 401/403/404/409), devolvem dados de domínio e não conhecem Express, ORM nem bibliotecas de criptografia.
 - **Repository:** é a interface de persistência que os use cases usam (`PostRepository`, `LikeRepository`, `ReplyRepository`, `UserRepository`).
 - **Adapter Drizzle:** implementa o repository com Drizzle (`DrizzlePostRepository`, `DrizzleLikeRepository`, `DrizzleReplyRepository`, `DrizzleUserRepository`). Detalhes do banco ficam só aqui, como os códigos de erro do Postgres `23505` (unicidade, e-mail duplicado) e `23503` (chave estrangeira, like ou reply em post inexistente) e o `ON CONFLICT DO NOTHING` que torna o like idempotente.
-- **Utils:** interfaces de funções auxiliares usadas pelos use cases (`PasswordHasher`, `TokenGenerator`, `ImageProcessor`, `FileStorage`) e seus adapters (`BcryptPasswordHasher`, `CryptoTokenGenerator`, `SharpImageProcessor`, `DiskFileStorage`). O custo do bcrypt e o hash fictício que protege o login contra timing attack ficam no adapter, assim como as dimensões das imagens e a geração do nome do arquivo (UUID).
+- **Utils:** interfaces de funções auxiliares usadas pelos use cases (`PasswordHasher`, `TokenGenerator`, `ImageProcessor`, `FileStorage`, `Mailer`) e seus adapters (`BcryptPasswordHasher`, `CryptoTokenGenerator`, `SharpImageProcessor`, `DiskFileStorage`, `NodemailerMailer`). O conteúdo dos e-mails é montado por funções puras em `src/emails/`. O custo do bcrypt e o hash fictício que protege o login contra timing attack ficam no adapter, assim como as dimensões das imagens e a geração do nome do arquivo (UUID).
 - **Upload:** o Multer só aparece em `middlewares/upload.ts`, guarda o arquivo em memória e traduz seus erros para `AppError`. O controller entrega ao use case apenas o `Buffer`; o use case processa a imagem, grava no disco e só então atualiza o banco (apagando o arquivo novo se a escrita no banco falhar).
 - **Middlewares de autenticação:** `ensureAuthenticated` resolve o usuário a partir do token antes do controller e exige o token. `optionalAuthentication` (usado em `GET /api/posts/:id`) deixa a requisição seguir anônima sem o header, mas responde 401 se o header vier inválido.
 - **Error handler:** converte `ZodError` e `AppError` no formato de erro padrão e esconde detalhes de erros inesperados.
@@ -410,7 +417,8 @@ src/
 ├── dtos/                # DTOs de saída + mappers (formato do JSON da API)
 ├── use-cases/           # regras de negócio, um use case por operação (posts/, likes/, replies/, auth/, users/)
 ├── repositories/        # interfaces de persistência + adapters Drizzle
-├── utils/               # interfaces de hash, token, imagem e arquivos + adapters
+├── utils/               # interfaces de hash, token, imagem, arquivos e e-mail + adapters
+├── emails/              # montagem do conteúdo dos e-mails (funções puras)
 ├── schemas/             # schemas Zod de entrada
 ├── routes/
 ├── middlewares/         # autenticação, upload (Multer) e tratamento de erros
