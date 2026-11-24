@@ -3,7 +3,10 @@ import request from 'supertest';
 
 export const defaultUser = { name: 'John Doe', email: 'john@example.com', password: 'secret123' };
 
-export type RegisteredUser = { token: string; user: { id: number; name: string; email: string } };
+export type RegisteredUser = {
+  token: string;
+  user: { id: number; name: string; email: string; avatarUrl: string | null };
+};
 
 export async function registerUser(app: Express, overrides: Partial<typeof defaultUser> = {}) {
   const response = await request(app)

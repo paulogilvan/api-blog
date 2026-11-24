@@ -4,7 +4,12 @@ import { users } from '../db/schema.ts';
 import { isPgError, PG_UNIQUE_VIOLATION } from './pg-error.ts';
 import type { UserRepository } from './user.repository.ts';
 
-const userColumns = { id: users.id, name: users.name, email: users.email };
+const userColumns = {
+  id: users.id,
+  name: users.name,
+  email: users.email,
+  avatarPath: users.avatarPath,
+};
 
 /** Adapter Drizzle para o UserRepository. */
 export class DrizzleUserRepository implements UserRepository {
@@ -51,5 +56,27 @@ export class DrizzleUserRepository implements UserRepository {
 
   async updateToken(id: number, token: string) {
     await db.update(users).set({ token }).where(eq(users.id, id));
+  }
+
+  async updateAvatarPath(id: number, avatarPath: string) {
+    // Ler o caminho anterior e gravar o novo na mesma transação, com a linha travada (FOR UPDATE):
+    // dois uploads simultâneos do mesmo usuário não leem o mesmo "anterior", o que deixaria
+    // um arquivo órfão no disco.
+    return db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({ avatarPath: users.avatarPath })
+        .from(users)
+        .where(eq(users.id, id))
+        .for('update');
+      if (!current) return null;
+
+      const [user] = await tx
+        .update(users)
+        .set({ avatarPath })
+        .where(eq(users.id, id))
+        .returning({ ...userColumns, createdAt: users.createdAt });
+
+      return { user, previousAvatarPath: current.avatarPath };
+    });
   }
 }

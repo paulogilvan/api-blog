@@ -29,7 +29,7 @@ describe('POST /api/auth/register', () => {
   });
 
   describe('success', () => {
-    it('returns 201 with token and user data', async () => {
+    it('returns 201 with token and user data (avatarUrl null for a new user)', async () => {
       const response = await request(app).post(route).send(validUser);
 
       expect(response.status).toBe(201);
@@ -39,6 +39,7 @@ describe('POST /api/auth/register', () => {
           id: expect.any(Number),
           name: validUser.name,
           email: validUser.email,
+          avatarUrl: null,
         },
       });
       expect(response.body.token.length).toBeGreaterThanOrEqual(32);

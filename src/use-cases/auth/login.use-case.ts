@@ -38,7 +38,7 @@ export class LoginUseCase implements UseCase<LoginInput, AuthSession> {
     await this.userRepository.updateToken(userWithPassword.id, token);
 
     // Só os campos públicos: o hash da senha não sai do use case.
-    const { id, name, email } = userWithPassword;
-    return { user: { id, name, email }, token };
+    const { id, name, email, avatarPath } = userWithPassword;
+    return { user: { id, name, email, avatarPath }, token };
   }
 }

@@ -5,6 +5,7 @@ import { createApp } from '../../../src/app.ts';
 import { db, pool } from '../../../src/db/index.ts';
 import { users } from '../../../src/db/schema.ts';
 import { resetDatabase } from '../../helpers/database.ts';
+import { makeImage, resetUploads } from '../../helpers/uploads.ts';
 
 const app = createApp();
 const route = '/api/auth/login';
@@ -30,9 +31,11 @@ async function findStoredToken(email: string) {
 describe('POST /api/auth/login', () => {
   beforeEach(async () => {
     await resetDatabase();
+    await resetUploads();
   });
 
   afterAll(async () => {
+    await resetUploads();
     await pool.end();
   });
 
@@ -49,8 +52,24 @@ describe('POST /api/auth/login', () => {
           id: registered.user.id,
           name: registeredUser.name,
           email: registeredUser.email,
+          avatarUrl: null,
         },
       });
+    });
+
+    it('returns the current avatarUrl when the user has an avatar', async () => {
+      const registered = await registerUser();
+      const upload = await request(app)
+        .put('/api/me/avatar')
+        .set('Authorization', `Bearer ${registered.token}`)
+        .attach('image', await makeImage(), 'avatar.png');
+
+      const response = await request(app).post(route).send(credentials);
+
+      expect(response.status).toBe(200);
+      expect(response.body.user.avatarUrl).toBe(upload.body.avatarUrl);
+      expect(response.body.user.avatarUrl).toMatch(/^\/uploads\/avatars\/[0-9a-f-]{36}\.webp$/);
+      expect(response.body.user).not.toHaveProperty('avatarPath');
     });
 
     it('never returns the password (nor its hash)', async () => {

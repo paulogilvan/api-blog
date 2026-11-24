@@ -7,6 +7,7 @@ API REST de blog com autenticação por token de sessão e gestão de posts, esc
 - A **listagem** (paginada) e a **consulta individual** de posts são públicas.
 - Usuários autenticados podem **curtir e descurtir** posts.
 - Usuários autenticados podem **responder** (reply) posts e **apagar apenas as próprias replies**.
+- Usuários autenticados podem **enviar ou trocar o próprio avatar** (imagem redimensionada para 200×200 e salva em disco).
 
 ## Stack
 
@@ -18,6 +19,7 @@ API REST de blog com autenticação por token de sessão e gestão de posts, esc
 | ORM | Drizzle |
 | Banco | PostgreSQL 17 (Docker Compose) |
 | Hash de senha | bcrypt |
+| Upload / imagens | Multer (multipart em memória) + Sharp (redimensiona e converte para WebP) |
 | Testes | Vitest + Supertest (integração com banco real) |
 
 ## Requisitos
@@ -58,6 +60,7 @@ curl http://localhost:3333/api/health
 | `NODE_ENV` | `development`, `test` ou `production` | `development` |
 | `PORT` | Porta HTTP | `3333` |
 | `DATABASE_URL` | URL de conexão do PostgreSQL | obrigatória |
+| `UPLOAD_DIR` | Pasta onde as imagens enviadas são gravadas (servida em `/uploads`) | `uploads` |
 
 Os valores são validados com Zod ao iniciar. Se algum for inválido, a aplicação não sobe.
 
@@ -97,6 +100,7 @@ Authorization: Bearer <token>
 | `DELETE` | `/api/posts/:id/likes` | Sim | Descurte um post |
 | `POST` | `/api/posts/:id/replies` | Sim | Responde um post |
 | `DELETE` | `/api/posts/:id/replies/:replyId` | Sim | Apaga a própria reply |
+| `PUT` | `/api/me/avatar` | Sim | Envia ou troca o próprio avatar |
 | `GET` | `/api/health` | Não | Status da API e do banco |
 
 ### Autenticação
@@ -114,11 +118,12 @@ curl -X POST http://localhost:3333/api/auth/register \
 ```json
 {
   "token": "3f9c...e1a0",
-  "user": { "id": 1, "name": "Maria", "email": "maria@example.com" }
+  "user": { "id": 1, "name": "Maria", "email": "maria@example.com", "avatarUrl": null }
 }
 ```
 
 - O e-mail é normalizado (sem espaços nas pontas e em minúsculas).
+- `avatarUrl` vem `null` no cadastro; no login, traz o avatar atual do usuário (ou `null`).
 - Cada login gera um novo token e invalida o anterior.
 - O login responde com a mesma mensagem genérica, seja o e-mail inexistente ou a senha errada.
 
@@ -237,6 +242,33 @@ curl -X POST http://localhost:3333/api/posts/1/replies \
 - Só o **autor da reply** pode apagá-la. Qualquer outro usuário recebe **403**, inclusive o dono do post.
 - Reply inexistente, ou que pertence a outro post que não o `:id` da URL, retorna **404**. A posse só é verificada depois de confirmar que a reply existe naquele post.
 
+### Avatar
+
+**`PUT /api/me/avatar`** recebe `multipart/form-data` com **um único arquivo** no campo `image`. Responde **200** com os dados do usuário logado:
+
+```bash
+curl -X PUT http://localhost:3333/api/me/avatar \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "image=@foto.jpg"
+```
+
+```json
+{
+  "id": 1,
+  "name": "Maria",
+  "email": "maria@example.com",
+  "avatarUrl": "/uploads/avatars/0f8e2c1a-6b3d-4e5f-9a7b-1c2d3e4f5a6b.webp",
+  "createdAt": "2026-08-07T21:00:00.000Z"
+}
+```
+
+- Aceita JPEG, PNG ou WebP de até **5 MB**. O formato é conferido decodificando o arquivo; a extensão e o `Content-Type` enviados não bastam.
+- A imagem é rotacionada conforme o EXIF, recortada no centro para **200×200**, convertida para **WebP** e gravada sem metadados (EXIF/GPS).
+- O nome do arquivo é um **UUID** gerado pelo servidor; o nome original é descartado. O banco guarda só o caminho relativo (`avatars/<uuid>.webp`).
+- Enviar um novo avatar substitui o anterior e apaga o arquivo antigo do disco.
+- O arquivo fica acessível em `GET /uploads/avatars/<uuid>.webp` (fora do prefixo `/api`).
+- Erros (todos **400** `VALIDATION_ERROR`): `Image is required` (sem arquivo), `Unexpected file field` (campo diferente de `image` ou mais de um arquivo), `File too large` (acima de 5 MB), `Invalid image` (não é JPEG/PNG/WebP válido) e `Invalid multipart body` (corpo multipart malformado). Sem token, **401** antes de ler o arquivo.
+
 Os parâmetros `id`, `replyId` e `page` aceitam apenas inteiros decimais positivos (`1`, `2`, `42`). Valores como `0`, `-1`, `01`, `1.5` ou `0x10` retornam 400.
 
 ### Erros
@@ -255,7 +287,7 @@ Todas as respostas de erro usam o mesmo formato:
 
 | HTTP | `code` | Quando |
 |---|---|---|
-| 400 | `VALIDATION_ERROR` | Body, parâmetro ou query inválido, ou JSON malformado |
+| 400 | `VALIDATION_ERROR` | Body, parâmetro ou query inválido, JSON malformado ou upload inválido |
 | 401 | `UNAUTHORIZED` | Token ausente ou inválido, ou credenciais incorretas |
 | 403 | `FORBIDDEN` | Tentativa de editar ou apagar o post de outro usuário |
 | 404 | `NOT_FOUND` | Post ou rota inexistente |
@@ -269,20 +301,22 @@ O campo `details` só aparece em erros de validação.
 Cada requisição passa pelas mesmas camadas:
 
 ```
-Route → (ensureAuthenticated) → Controller → Use Case → Repository / Utils (interfaces)
-                                     ↑                              ↑ implementam
-                                Zod (input)        Drizzle*Repository → PostgreSQL
-                                                   BcryptPasswordHasher, CryptoTokenGenerator
+Route → (ensureAuthenticated) → (upload Multer) → Controller → Use Case → Repository / Utils (interfaces)
+                                                       ↑                              ↑ implementam
+                                                  Zod (input)        Drizzle*Repository → PostgreSQL
+                                                                     BcryptPasswordHasher, CryptoTokenGenerator,
+                                                                     SharpImageProcessor, DiskFileStorage
 ```
 
 Cada camada tem uma responsabilidade só (SRP):
 
 - **Controller:** cuida do HTTP. Valida `body`, `params` e `query` com Zod, chama o use case e **delega a montagem do corpo da resposta** aos mappers de DTO de saída.
-- **DTOs de saída:** descrevem o JSON da API em `src/dtos/`: `PostOutputDTO`, `PostDetailOutputDTO` e `PostListOutputDTO` (posts), `LikesOutputDTO` (likes), `ReplyOutputDTO` (replies) e `AuthOutputDTO` (cadastro e login). Os mappers (`toPostOutputDTO`, `toPostDetailOutputDTO`, `toPostListOutputDTO`, `toLikesOutputDTO`, `toReplyOutputDTO`, `toAuthOutputDTO`) são funções puras que escolhem os campos expostos (o hash da senha nunca sai), convertem datas para ISO e montam o envelope `{ data, meta }` da listagem.
-- **Use cases:** cada operação é uma classe própria que implementa a interface `UseCase<Input, Output>`, com um único método `execute`. Posts: `ListPostsUseCase`, `GetPostUseCase`, `CreatePostUseCase`, `UpdatePostUseCase` e `DeletePostUseCase`. Likes: `LikePostUseCase` e `UnlikePostUseCase`. Replies: `CreateReplyUseCase` e `DeleteReplyUseCase`. Auth: `RegisterUseCase`, `LoginUseCase` e `FindUserByTokenUseCase`. Concentram as regras de negócio (posse do post e da reply, paginação, cadastro e login, erros 401/403/404/409), devolvem dados de domínio e não conhecem Express, ORM nem bibliotecas de criptografia.
+- **DTOs de saída:** descrevem o JSON da API em `src/dtos/`: `PostOutputDTO`, `PostDetailOutputDTO` e `PostListOutputDTO` (posts), `LikesOutputDTO` (likes), `ReplyOutputDTO` (replies), `AuthOutputDTO` (cadastro e login) e `MeOutputDTO` (usuário logado). Os mappers (`toPostOutputDTO`, `toPostDetailOutputDTO`, `toPostListOutputDTO`, `toLikesOutputDTO`, `toReplyOutputDTO`, `toAuthOutputDTO`, `toMeOutputDTO`) são funções puras que escolhem os campos expostos (o hash da senha nunca sai), convertem datas para ISO e montam o envelope `{ data, meta }` da listagem.
+- **Use cases:** cada operação é uma classe própria que implementa a interface `UseCase<Input, Output>`, com um único método `execute`. Posts: `ListPostsUseCase`, `GetPostUseCase`, `CreatePostUseCase`, `UpdatePostUseCase` e `DeletePostUseCase`. Likes: `LikePostUseCase` e `UnlikePostUseCase`. Replies: `CreateReplyUseCase` e `DeleteReplyUseCase`. Auth: `RegisterUseCase`, `LoginUseCase` e `FindUserByTokenUseCase`. Usuário: `UpdateAvatarUseCase`. Concentram as regras de negócio (posse do post e da reply, paginação, cadastro e login, erros 401/403/404/409), devolvem dados de domínio e não conhecem Express, ORM nem bibliotecas de criptografia.
 - **Repository:** é a interface de persistência que os use cases usam (`PostRepository`, `LikeRepository`, `ReplyRepository`, `UserRepository`).
 - **Adapter Drizzle:** implementa o repository com Drizzle (`DrizzlePostRepository`, `DrizzleLikeRepository`, `DrizzleReplyRepository`, `DrizzleUserRepository`). Detalhes do banco ficam só aqui, como os códigos de erro do Postgres `23505` (unicidade, e-mail duplicado) e `23503` (chave estrangeira, like ou reply em post inexistente) e o `ON CONFLICT DO NOTHING` que torna o like idempotente.
-- **Utils:** interfaces de funções auxiliares usadas pelos use cases de auth (`PasswordHasher`, `TokenGenerator`) e seus adapters (`BcryptPasswordHasher`, `CryptoTokenGenerator`). O custo do bcrypt e o hash fictício que protege o login contra timing attack ficam no adapter.
+- **Utils:** interfaces de funções auxiliares usadas pelos use cases (`PasswordHasher`, `TokenGenerator`, `ImageProcessor`, `FileStorage`) e seus adapters (`BcryptPasswordHasher`, `CryptoTokenGenerator`, `SharpImageProcessor`, `DiskFileStorage`). O custo do bcrypt e o hash fictício que protege o login contra timing attack ficam no adapter, assim como as dimensões das imagens e a geração do nome do arquivo (UUID).
+- **Upload:** o Multer só aparece em `middlewares/upload.ts`, guarda o arquivo em memória e traduz seus erros para `AppError`. O controller entrega ao use case apenas o `Buffer`; o use case processa a imagem, grava no disco e só então atualiza o banco (apagando o arquivo novo se a escrita no banco falhar).
 - **Middlewares de autenticação:** `ensureAuthenticated` resolve o usuário a partir do token antes do controller e exige o token. `optionalAuthentication` (usado em `GET /api/posts/:id`) deixa a requisição seguir anônima sem o header, mas responde 401 se o header vier inválido.
 - **Error handler:** converte `ZodError` e `AppError` no formato de erro padrão e esconde detalhes de erros inesperados.
 
@@ -318,15 +352,16 @@ src/
 ├── env.ts               # validação das variáveis de ambiente
 ├── controllers/         # HTTP: entrada, status e chamada aos use cases
 ├── dtos/                # DTOs de saída + mappers (formato do JSON da API)
-├── use-cases/           # regras de negócio, um use case por operação (posts/, likes/, replies/, auth/)
+├── use-cases/           # regras de negócio, um use case por operação (posts/, likes/, replies/, auth/, users/)
 ├── repositories/        # interfaces de persistência + adapters Drizzle
-├── utils/               # interfaces de hash de senha e token + adapters
+├── utils/               # interfaces de hash, token, imagem e arquivos + adapters
 ├── schemas/             # schemas Zod de entrada
 ├── routes/
-├── middlewares/         # autenticação e tratamento de erros
+├── middlewares/         # autenticação, upload (Multer) e tratamento de erros
 ├── errors/              # AppError
 └── db/                  # conexão e schema do Drizzle
 drizzle/                 # migrations SQL
+uploads/                 # imagens enviadas (conteúdo fora do git)
 tests/
 ├── integration/         # testes HTTP por endpoint
 ├── unit/
@@ -342,4 +377,4 @@ npm run db:up   # se os containers ainda não estiverem rodando
 npm test
 ```
 
-A configuração do banco de teste fica em `.env.test`.
+A configuração do banco de teste fica em `.env.test`. Os uploads dos testes vão para `tmp/uploads-test` (limpo entre os testes), e as imagens de teste são geradas em memória com Sharp.
