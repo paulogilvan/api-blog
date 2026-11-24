@@ -14,6 +14,8 @@ export const users = pgTable('users', {
   email: varchar({ length: 255 }).notNull().unique(),
   password: varchar({ length: 255 }).notNull(),
   token: varchar({ length: 64 }).unique(),
+  // Caminho relativo a UPLOAD_DIR (ex.: `avatars/<hex>.webp`); a URL pública é montada no DTO.
+  avatarPath: varchar('avatar_path', { length: 255 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -23,6 +25,8 @@ export const posts = pgTable(
     id: integer().primaryKey().generatedAlwaysAsIdentity(),
     title: varchar({ length: 200 }).notNull(),
     content: text().notNull(),
+    // Caminho relativo a UPLOAD_DIR (ex.: `posts/<hex>.webp`); a URL pública é montada no DTO.
+    imagePath: varchar('image_path', { length: 255 }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     authorId: integer('author_id')
       .notNull()

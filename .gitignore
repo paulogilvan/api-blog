@@ -13,6 +13,12 @@ dist-ssr
 *.local
 docs
 
+# Uploads (imagens gravadas em runtime): ignora o conteúdo, mas mantém a pasta no repositório
+uploads/*
+!uploads/.gitkeep
+# Arquivos temporários (ex.: uploads gravados pelos testes)
+tmp
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
