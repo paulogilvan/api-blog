@@ -6,6 +6,7 @@ import { getAuthenticatedUser } from '../middlewares/ensure-authenticated.ts';
 import { DrizzleUserRepository } from '../repositories/drizzle-user.repository.ts';
 import type { UserProfileRecord, UserRepository } from '../repositories/user.repository.ts';
 import type { UseCase } from '../use-cases/use-case.ts';
+import { GetMeUseCase, type GetMeInput } from '../use-cases/users/get-me.use-case.ts';
 import {
   UpdateAvatarUseCase,
   type UpdateAvatarInput,
@@ -20,11 +21,19 @@ const userRepository: UserRepository = new DrizzleUserRepository();
 const imageProcessor: ImageProcessor = new SharpImageProcessor();
 const fileStorage: FileStorage = new DiskFileStorage(env.UPLOAD_DIR);
 
+const getMe: UseCase<GetMeInput, UserProfileRecord> = new GetMeUseCase(userRepository);
 const updateAvatar: UseCase<UpdateAvatarInput, UserProfileRecord> = new UpdateAvatarUseCase(
   userRepository,
   imageProcessor,
   fileStorage,
 );
+
+export const getMeController: RequestHandler = async (req, res) => {
+  const { id } = getAuthenticatedUser(req);
+
+  const user = await getMe.execute({ userId: id });
+  res.status(200).json(toMeOutputDTO(user));
+};
 
 export const updateAvatarController: RequestHandler = async (req, res) => {
   const { id } = getAuthenticatedUser(req);

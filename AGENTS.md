@@ -14,7 +14,7 @@ API REST de blog em **TypeScript + Express 5 + Drizzle ORM + PostgreSQL 17**.
 - Replies: usuário autenticado responde posts e só o autor da reply a apaga; as replies são públicas e aparecem no post individual.
 - Imagens (em implementação): foto do post e avatar do usuário, enviados via `multipart/form-data`, processados com **Sharp** e gravados em disco; o banco guarda só o caminho relativo. Ver [Uploads de imagem](#uploads-de-imagem-foto-do-post-e-avatar).
 - Notificação por e-mail (em implementação): o autor do post recebe um e-mail quando alguém responde ao post dele. Envio via **Nodemailer**; em dev/teste o SMTP é o **Mailpit**. Ver [E-mail](#e-mail-notificação-de-nova-reply).
-- Escopo fechado em **auth + posts + likes + replies + imagens + e-mail de nova reply** (sem logout, perfil além do avatar, troca de senha, admin, thread de replies, like em reply, paginação ou edição de replies, nem outros e-mails — ver `docs/api.md`).
+- Escopo fechado em **auth + posts + likes + replies + imagens + e-mail de nova reply** (sem logout, perfil além de `GET /me` e do avatar, troca de senha, admin, thread de replies, like em reply, paginação ou edição de replies, nem outros e-mails — ver `docs/api.md`).
 
 Idioma: código (identificadores, mensagens de erro da API) e mensagens de commit em **inglês**; comentários e docs em **português**.
 

@@ -7,6 +7,7 @@ API REST de blog com autenticação por token de sessão e gestão de posts, esc
 - A **listagem** (paginada) e a **consulta individual** de posts são públicas.
 - Usuários autenticados podem **curtir e descurtir** posts.
 - Usuários autenticados podem **responder** (reply) posts e **apagar apenas as próprias replies**.
+- Usuários autenticados podem **consultar os próprios dados** (`GET /api/me`).
 - Usuários autenticados podem **enviar ou trocar o próprio avatar** (imagem redimensionada para 200×200 e salva em disco).
 
 ## Stack
@@ -100,6 +101,7 @@ Authorization: Bearer <token>
 | `DELETE` | `/api/posts/:id/likes` | Sim | Descurte um post |
 | `POST` | `/api/posts/:id/replies` | Sim | Responde um post |
 | `DELETE` | `/api/posts/:id/replies/:replyId` | Sim | Apaga a própria reply |
+| `GET` | `/api/me` | Sim | Retorna os dados do usuário logado |
 | `PUT` | `/api/me/avatar` | Sim | Envia ou troca o próprio avatar |
 | `GET` | `/api/health` | Não | Status da API e do banco |
 
@@ -242,6 +244,28 @@ curl -X POST http://localhost:3333/api/posts/1/replies \
 - Só o **autor da reply** pode apagá-la. Qualquer outro usuário recebe **403**, inclusive o dono do post.
 - Reply inexistente, ou que pertence a outro post que não o `:id` da URL, retorna **404**. A posse só é verificada depois de confirmar que a reply existe naquele post.
 
+### Usuário logado
+
+**`GET /api/me`** retorna os dados do dono do token. Responde **200**:
+
+```bash
+curl http://localhost:3333/api/me -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{
+  "id": 1,
+  "name": "Maria",
+  "email": "maria@example.com",
+  "avatarUrl": null,
+  "createdAt": "2026-08-07T21:00:00.000Z"
+}
+```
+
+- `avatarUrl` vem `null` enquanto o usuário não enviar um avatar.
+- Hash de senha e token nunca aparecem na resposta.
+- Sem token, com token inválido ou com token substituído por um novo login, responde **401**.
+
 ### Avatar
 
 **`PUT /api/me/avatar`** recebe `multipart/form-data` com **um único arquivo** no campo `image`. Responde **200** com os dados do usuário logado:
@@ -312,7 +336,7 @@ Cada camada tem uma responsabilidade só (SRP):
 
 - **Controller:** cuida do HTTP. Valida `body`, `params` e `query` com Zod, chama o use case e **delega a montagem do corpo da resposta** aos mappers de DTO de saída.
 - **DTOs de saída:** descrevem o JSON da API em `src/dtos/`: `PostOutputDTO`, `PostDetailOutputDTO` e `PostListOutputDTO` (posts), `LikesOutputDTO` (likes), `ReplyOutputDTO` (replies), `AuthOutputDTO` (cadastro e login) e `MeOutputDTO` (usuário logado). Os mappers (`toPostOutputDTO`, `toPostDetailOutputDTO`, `toPostListOutputDTO`, `toLikesOutputDTO`, `toReplyOutputDTO`, `toAuthOutputDTO`, `toMeOutputDTO`) são funções puras que escolhem os campos expostos (o hash da senha nunca sai), convertem datas para ISO e montam o envelope `{ data, meta }` da listagem.
-- **Use cases:** cada operação é uma classe própria que implementa a interface `UseCase<Input, Output>`, com um único método `execute`. Posts: `ListPostsUseCase`, `GetPostUseCase`, `CreatePostUseCase`, `UpdatePostUseCase` e `DeletePostUseCase`. Likes: `LikePostUseCase` e `UnlikePostUseCase`. Replies: `CreateReplyUseCase` e `DeleteReplyUseCase`. Auth: `RegisterUseCase`, `LoginUseCase` e `FindUserByTokenUseCase`. Usuário: `UpdateAvatarUseCase`. Concentram as regras de negócio (posse do post e da reply, paginação, cadastro e login, erros 401/403/404/409), devolvem dados de domínio e não conhecem Express, ORM nem bibliotecas de criptografia.
+- **Use cases:** cada operação é uma classe própria que implementa a interface `UseCase<Input, Output>`, com um único método `execute`. Posts: `ListPostsUseCase`, `GetPostUseCase`, `CreatePostUseCase`, `UpdatePostUseCase` e `DeletePostUseCase`. Likes: `LikePostUseCase` e `UnlikePostUseCase`. Replies: `CreateReplyUseCase` e `DeleteReplyUseCase`. Auth: `RegisterUseCase`, `LoginUseCase` e `FindUserByTokenUseCase`. Usuário: `GetMeUseCase` e `UpdateAvatarUseCase`. Concentram as regras de negócio (posse do post e da reply, paginação, cadastro e login, erros 401/403/404/409), devolvem dados de domínio e não conhecem Express, ORM nem bibliotecas de criptografia.
 - **Repository:** é a interface de persistência que os use cases usam (`PostRepository`, `LikeRepository`, `ReplyRepository`, `UserRepository`).
 - **Adapter Drizzle:** implementa o repository com Drizzle (`DrizzlePostRepository`, `DrizzleLikeRepository`, `DrizzleReplyRepository`, `DrizzleUserRepository`). Detalhes do banco ficam só aqui, como os códigos de erro do Postgres `23505` (unicidade, e-mail duplicado) e `23503` (chave estrangeira, like ou reply em post inexistente) e o `ON CONFLICT DO NOTHING` que torna o like idempotente.
 - **Utils:** interfaces de funções auxiliares usadas pelos use cases (`PasswordHasher`, `TokenGenerator`, `ImageProcessor`, `FileStorage`) e seus adapters (`BcryptPasswordHasher`, `CryptoTokenGenerator`, `SharpImageProcessor`, `DiskFileStorage`). O custo do bcrypt e o hash fictício que protege o login contra timing attack ficam no adapter, assim como as dimensões das imagens e a geração do nome do arquivo (UUID).

@@ -39,6 +39,16 @@ export class DrizzleUserRepository implements UserRepository {
     return user ?? null;
   }
 
+  async findProfileById(id: number) {
+    const [user] = await db
+      .select({ ...userColumns, createdAt: users.createdAt })
+      .from(users)
+      .where(eq(users.id, id))
+      .limit(1);
+
+    return user ?? null;
+  }
+
   async create(data: { name: string; email: string; passwordHash: string; token: string }) {
     try {
       const [user] = await db

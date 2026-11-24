@@ -11,6 +11,7 @@ export interface UserRepository {
   existsByEmail(email: string): Promise<boolean>;
   findByEmailWithPassword(email: string): Promise<UserWithPasswordRecord | null>;
   findByToken(token: string): Promise<UserRecord | null>;
+  findProfileById(id: number): Promise<UserProfileRecord | null>;
   /** Retorna `null` se o e-mail já existir (violação de unicidade). */
   create(data: {
     name: string;
