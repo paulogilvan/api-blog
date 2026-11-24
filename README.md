@@ -9,6 +9,7 @@ API REST de blog com autenticação por token de sessão e gestão de posts, esc
 - Usuários autenticados podem **responder** (reply) posts e **apagar apenas as próprias replies**.
 - Usuários autenticados podem **consultar os próprios dados** (`GET /api/me`).
 - Usuários autenticados podem **enviar ou trocar o próprio avatar** (imagem redimensionada para 200×200 e salva em disco).
+- O dono de um post pode **enviar ou trocar a imagem do post** (reduzida para no máximo 720p e salva em disco).
 
 ## Stack
 
@@ -96,7 +97,8 @@ Authorization: Bearer <token>
 | `GET` | `/api/posts/:id` | Opcional | Retorna um post com suas replies (e `likedByMe` se houver token) |
 | `POST` | `/api/posts` | Sim | Cria um post |
 | `PUT` | `/api/posts/:id` | Sim | Atualiza parcialmente o próprio post |
-| `DELETE` | `/api/posts/:id` | Sim | Apaga o próprio post |
+| `DELETE` | `/api/posts/:id` | Sim | Apaga o próprio post (e a imagem dele) |
+| `PUT` | `/api/posts/:id/image` | Sim | Envia ou troca a imagem do próprio post |
 | `POST` | `/api/posts/:id/likes` | Sim | Curte um post |
 | `DELETE` | `/api/posts/:id/likes` | Sim | Descurte um post |
 | `POST` | `/api/posts/:id/replies` | Sim | Responde um post |
@@ -138,12 +140,15 @@ A listagem e as respostas de criação e edição usam o formato abaixo. O autor
   "id": 1,
   "title": "Meu primeiro post",
   "content": "Olá, mundo!",
+  "imageUrl": "/uploads/posts/7d1c9e4b-2a3f-4b8c-9d0e-5f6a7b8c9d0e.webp",
   "createdAt": "2026-08-07T21:00:00.000Z",
   "author": { "id": 1, "name": "Maria" },
   "likesCount": 3,
   "repliesCount": 1
 }
 ```
+
+`imageUrl` é `null` quando o post não tem imagem (ver [Imagem do post](#imagem-do-post)).
 
 **`GET /api/posts/:id`** retorna o mesmo formato acrescido de `likedByMe` e da lista completa de `replies`:
 
@@ -152,6 +157,7 @@ A listagem e as respostas de criação e edição usam o formato abaixo. O autor
   "id": 1,
   "title": "Meu primeiro post",
   "content": "Olá, mundo!",
+  "imageUrl": null,
   "createdAt": "2026-08-07T21:00:00.000Z",
   "author": { "id": 1, "name": "Maria" },
   "likesCount": 3,
@@ -243,6 +249,23 @@ curl -X POST http://localhost:3333/api/posts/1/replies \
 
 - Só o **autor da reply** pode apagá-la. Qualquer outro usuário recebe **403**, inclusive o dono do post.
 - Reply inexistente, ou que pertence a outro post que não o `:id` da URL, retorna **404**. A posse só é verificada depois de confirmar que a reply existe naquele post.
+
+### Imagem do post
+
+**`PUT /api/posts/:id/image`** recebe `multipart/form-data` com **um único arquivo** no campo `image`. Só o **dono do post** pode enviar. Responde **200** com o post no formato da listagem e o novo `imageUrl`:
+
+```bash
+curl -X PUT http://localhost:3333/api/posts/1/image \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "image=@foto.jpg"
+```
+
+- Aceita JPEG, PNG ou WebP de até **5 MB**. O formato é conferido decodificando o arquivo; a extensão e o `Content-Type` enviados não bastam.
+- O tamanho não é fixo: a imagem é reduzida, mantendo a proporção, para caber em **1280×720 (720p)**. Paisagem fica com até 1280 px de largura e retrato com até 720 px de altura. Imagens menores não são ampliadas.
+- Também é rotacionada conforme o EXIF, convertida para **WebP** e gravada sem metadados (EXIF/GPS), com nome **UUID** gerado pelo servidor (`posts/<uuid>.webp`).
+- Enviar uma nova imagem substitui a anterior e apaga o arquivo antigo. Apagar o post também apaga a imagem.
+- Ordem das checagens: auth (401) → upload (400 `File too large` / `Unexpected file field`) → `id` e presença do arquivo (400) → post inexistente (404) → post de outro usuário (403 `You can only update your own posts`) → decodificação (400 `Invalid image`).
+- Os erros de upload são os mesmos do [avatar](#avatar). Nenhum arquivo fica gravado quando a requisição falha.
 
 ### Usuário logado
 
@@ -336,7 +359,7 @@ Cada camada tem uma responsabilidade só (SRP):
 
 - **Controller:** cuida do HTTP. Valida `body`, `params` e `query` com Zod, chama o use case e **delega a montagem do corpo da resposta** aos mappers de DTO de saída.
 - **DTOs de saída:** descrevem o JSON da API em `src/dtos/`: `PostOutputDTO`, `PostDetailOutputDTO` e `PostListOutputDTO` (posts), `LikesOutputDTO` (likes), `ReplyOutputDTO` (replies), `AuthOutputDTO` (cadastro e login) e `MeOutputDTO` (usuário logado). Os mappers (`toPostOutputDTO`, `toPostDetailOutputDTO`, `toPostListOutputDTO`, `toLikesOutputDTO`, `toReplyOutputDTO`, `toAuthOutputDTO`, `toMeOutputDTO`) são funções puras que escolhem os campos expostos (o hash da senha nunca sai), convertem datas para ISO e montam o envelope `{ data, meta }` da listagem.
-- **Use cases:** cada operação é uma classe própria que implementa a interface `UseCase<Input, Output>`, com um único método `execute`. Posts: `ListPostsUseCase`, `GetPostUseCase`, `CreatePostUseCase`, `UpdatePostUseCase` e `DeletePostUseCase`. Likes: `LikePostUseCase` e `UnlikePostUseCase`. Replies: `CreateReplyUseCase` e `DeleteReplyUseCase`. Auth: `RegisterUseCase`, `LoginUseCase` e `FindUserByTokenUseCase`. Usuário: `GetMeUseCase` e `UpdateAvatarUseCase`. Concentram as regras de negócio (posse do post e da reply, paginação, cadastro e login, erros 401/403/404/409), devolvem dados de domínio e não conhecem Express, ORM nem bibliotecas de criptografia.
+- **Use cases:** cada operação é uma classe própria que implementa a interface `UseCase<Input, Output>`, com um único método `execute`. Posts: `ListPostsUseCase`, `GetPostUseCase`, `CreatePostUseCase`, `UpdatePostUseCase`, `UpdatePostImageUseCase` e `DeletePostUseCase`. Likes: `LikePostUseCase` e `UnlikePostUseCase`. Replies: `CreateReplyUseCase` e `DeleteReplyUseCase`. Auth: `RegisterUseCase`, `LoginUseCase` e `FindUserByTokenUseCase`. Usuário: `GetMeUseCase` e `UpdateAvatarUseCase`. Concentram as regras de negócio (posse do post e da reply, paginação, cadastro e login, erros 401/403/404/409), devolvem dados de domínio e não conhecem Express, ORM nem bibliotecas de criptografia.
 - **Repository:** é a interface de persistência que os use cases usam (`PostRepository`, `LikeRepository`, `ReplyRepository`, `UserRepository`).
 - **Adapter Drizzle:** implementa o repository com Drizzle (`DrizzlePostRepository`, `DrizzleLikeRepository`, `DrizzleReplyRepository`, `DrizzleUserRepository`). Detalhes do banco ficam só aqui, como os códigos de erro do Postgres `23505` (unicidade, e-mail duplicado) e `23503` (chave estrangeira, like ou reply em post inexistente) e o `ON CONFLICT DO NOTHING` que torna o like idempotente.
 - **Utils:** interfaces de funções auxiliares usadas pelos use cases (`PasswordHasher`, `TokenGenerator`, `ImageProcessor`, `FileStorage`) e seus adapters (`BcryptPasswordHasher`, `CryptoTokenGenerator`, `SharpImageProcessor`, `DiskFileStorage`). O custo do bcrypt e o hash fictício que protege o login contra timing attack ficam no adapter, assim como as dimensões das imagens e a geração do nome do arquivo (UUID).

@@ -1,4 +1,11 @@
-export type PostRecord = { id: number; title: string; content: string; createdAt: Date };
+/** `imagePath` é o caminho relativo a UPLOAD_DIR (ou `null`); a URL pública é montada no DTO. */
+export type PostRecord = {
+  id: number;
+  title: string;
+  content: string;
+  imagePath: string | null;
+  createdAt: Date;
+};
 
 /** Contadores derivados de outras tabelas, calculados na leitura (não são colunas de `posts`). */
 export type PostCountersRecord = { likesCount: number; repliesCount: number };
@@ -19,5 +26,14 @@ export interface PostRepository {
     id: number,
     data: { title?: string; content?: string },
   ): Promise<(PostRecord & PostCountersRecord) | null>;
-  delete(id: number): Promise<boolean>;
+  /**
+   * Troca a imagem e retorna o caminho anterior (para o arquivo antigo ser apagado).
+   * Retorna `null` se o post não existir mais.
+   */
+  updateImagePath(
+    id: number,
+    imagePath: string,
+  ): Promise<{ post: PostRecord & PostCountersRecord; previousImagePath: string | null } | null>;
+  /** Apaga o post e retorna o caminho da imagem dele (para o arquivo ser apagado); `null` se não existia. */
+  delete(id: number): Promise<{ imagePath: string | null } | null>;
 }

@@ -7,11 +7,13 @@ import {
   getPostController,
   listPostsController,
   updatePostController,
+  updatePostImageController,
 } from '../controllers/post.controller.ts';
 import {
   ensureAuthenticated,
   optionalAuthentication,
 } from '../middlewares/ensure-authenticated.ts';
+import { singleImage } from '../middlewares/upload.ts';
 
 export const postRoutes = Router();
 
@@ -24,6 +26,8 @@ postRoutes.get('/:id', optionalAuthentication, getPostController);
 postRoutes.post('/', ensureAuthenticated, createPostController);
 postRoutes.put('/:id', ensureAuthenticated, updatePostController);
 postRoutes.delete('/:id', ensureAuthenticated, deletePostController);
+// Autenticação antes do upload: requisição sem token é rejeitada sem ler o arquivo.
+postRoutes.put('/:id/image', ensureAuthenticated, singleImage(), updatePostImageController);
 postRoutes.post('/:id/likes', ensureAuthenticated, likePostController);
 postRoutes.delete('/:id/likes', ensureAuthenticated, unlikePostController);
 postRoutes.post('/:id/replies', ensureAuthenticated, createReplyController);

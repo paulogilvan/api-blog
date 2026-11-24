@@ -10,6 +10,11 @@ const MAX_INPUT_PIXELS = 40_000_000;
 
 const AVATAR_SIZE = 200;
 
+// Imagem do post limitada a 720p: cabe numa caixa de 1280x720 (paisagem até 1280 de largura,
+// retrato até 720 de altura), mantendo a proporção.
+const POST_MAX_WIDTH = 1280;
+const POST_MAX_HEIGHT = 720;
+
 const invalidImage = () => new AppError('VALIDATION_ERROR', 'Invalid image');
 
 /** Adapter Sharp: valida o formato real pelos bytes e re-encoda para WebP sem metadados. */
@@ -33,6 +38,13 @@ export class SharpImageProcessor implements ImageProcessor {
       case 'avatar':
         // `cover` recorta o centro e amplia imagens menores: o avatar sai sempre 200x200.
         pipeline.resize(AVATAR_SIZE, AVATAR_SIZE, { fit: 'cover' });
+        break;
+      case 'post':
+        // `inside` só reduz até caber na caixa; `withoutEnlargement` não amplia imagens menores.
+        pipeline.resize(POST_MAX_WIDTH, POST_MAX_HEIGHT, {
+          fit: 'inside',
+          withoutEnlargement: true,
+        });
         break;
     }
 

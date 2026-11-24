@@ -52,6 +52,7 @@ describe('GET /api/posts', () => {
           id: post.id,
           title: post.title,
           content: post.content,
+          imageUrl: null,
           createdAt: post.createdAt.toISOString(),
           author: { id: user.id, name: user.name },
           likesCount: 0,

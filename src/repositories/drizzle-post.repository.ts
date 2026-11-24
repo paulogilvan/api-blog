@@ -12,6 +12,7 @@ const postColumns = {
   id: posts.id,
   title: posts.title,
   content: posts.content,
+  imagePath: posts.imagePath,
   createdAt: posts.createdAt,
 };
 
@@ -104,8 +105,35 @@ export class DrizzlePostRepository implements PostRepository {
     return post ?? null;
   }
 
+  async updateImagePath(id: number, imagePath: string) {
+    // Ler o caminho anterior e gravar o novo na mesma transação, com a linha travada (FOR UPDATE):
+    // dois uploads simultâneos no mesmo post não leem o mesmo "anterior", o que deixaria
+    // um arquivo órfão no disco.
+    return db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({ imagePath: posts.imagePath })
+        .from(posts)
+        .where(eq(posts.id, id))
+        .for('update');
+      if (!current) return null;
+
+      const [post] = await tx
+        .update(posts)
+        .set({ imagePath })
+        .where(eq(posts.id, id))
+        .returning(postWithCountersColumns);
+
+      return { post, previousImagePath: current.imagePath };
+    });
+  }
+
   async delete(id: number) {
-    const deleted = await db.delete(posts).where(eq(posts.id, id)).returning({ id: posts.id });
-    return deleted.length > 0;
+    // O RETURNING devolve o caminho da imagem da linha apagada: sem leitura prévia separada,
+    // que poderia ver uma imagem já trocada por um upload simultâneo.
+    const [deleted] = await db
+      .delete(posts)
+      .where(eq(posts.id, id))
+      .returning({ imagePath: posts.imagePath });
+    return deleted ?? null;
   }
 }

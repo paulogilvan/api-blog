@@ -35,6 +35,7 @@ describe('GET /api/posts/:id', () => {
         id: post.id,
         title: post.title,
         content: post.content,
+        imageUrl: null,
         createdAt: post.createdAt,
         author: { id: user.id, name: user.name },
         likesCount: 0,

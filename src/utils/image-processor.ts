@@ -1,5 +1,5 @@
 /** Presets de processamento; as dimensões ficam no adapter, nunca vêm do request. */
-export type ImagePreset = 'avatar';
+export type ImagePreset = 'avatar' | 'post';
 
 /**
  * Abstração de processamento de imagem. Recebe os bytes enviados pelo cliente e devolve a imagem

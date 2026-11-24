@@ -12,7 +12,7 @@ API REST de blog em **TypeScript + Express 5 + Drizzle ORM + PostgreSQL 17**.
 - Posts: listagem paginada e consulta por id são **públicas**; criar/editar/apagar exige auth, e só o dono edita/apaga.
 - Likes: usuário autenticado curte/descurte posts; a contagem é pública.
 - Replies: usuário autenticado responde posts e só o autor da reply a apaga; as replies são públicas e aparecem no post individual.
-- Imagens (em implementação): foto do post e avatar do usuário, enviados via `multipart/form-data`, processados com **Sharp** e gravados em disco; o banco guarda só o caminho relativo. Ver [Uploads de imagem](#uploads-de-imagem-foto-do-post-e-avatar).
+- Imagens: foto do post e avatar do usuário, enviados via `multipart/form-data`, processados com **Sharp** e gravados em disco; o banco guarda só o caminho relativo. Ver [Uploads de imagem](#uploads-de-imagem-foto-do-post-e-avatar).
 - Notificação por e-mail (em implementação): o autor do post recebe um e-mail quando alguém responde ao post dele. Envio via **Nodemailer**; em dev/teste o SMTP é o **Mailpit**. Ver [E-mail](#e-mail-notificação-de-nova-reply).
 - Escopo fechado em **auth + posts + likes + replies + imagens + e-mail de nova reply** (sem logout, perfil além de `GET /me` e do avatar, troca de senha, admin, thread de replies, like em reply, paginação ou edição de replies, nem outros e-mails — ver `docs/api.md`).
 
@@ -114,7 +114,7 @@ Route → [ensureAuthenticated] → [upload (Multer)] → Controller → Use Cas
   - `id` e `page` aceitam só `^[1-9]\d*$` e ≤ 2147483647 (int do Postgres). `0`, `01`, `1.5`, `0x10` → 400.
   - Listagem: 10 por página (`POSTS_PER_PAGE`), ordem `created_at DESC, id DESC`; página e `count` lidos na mesma transação `repeatable read`. Página além da última → `data: []`, não 404. Resposta `{ data, meta: { page, limit, total, totalPages } }`.
   - Autor exposto só como `{ id, name }`.
-  - Formatos: `PostSummary` (listagem, criação, edição) com `likesCount` e `repliesCount`, calculados por subconsultas correlacionadas no `DrizzlePostRepository`; `PostDetail` (`GET /:id`) acrescenta `likedByMe` e `replies`.
+  - Formatos: `PostSummary` (listagem, criação, edição, troca de imagem) com `imageUrl` (ou `null`), `likesCount` e `repliesCount`, calculados por subconsultas correlacionadas no `DrizzlePostRepository`; `PostDetail` (`GET /:id`) acrescenta `likedByMe` e `replies`.
   - `GET /posts/:id` usa `optionalAuthentication`: sem header → anônimo (`likedByMe: false`); header presente e inválido → 401. A listagem ignora o header.
 - **Likes** (`POST`/`DELETE /posts/:id/likes`):
   - Idempotentes: like repetido usa `ON CONFLICT DO NOTHING`; unlike sem like não é erro. Ambos respondem `200 { likes }`.
@@ -148,14 +148,14 @@ Princípio: **Multer só na borda; o use case recebe um `Buffer`; Sharp processa
   3. `fileStorage.save(...)`.
   4. Atualizar o caminho no repository. **Se falhar (ou o registro sumir → 404/401), apagar o arquivo recém-salvo** antes de relançar.
   5. Só depois de gravar no banco, apagar o arquivo antigo (substituição). Falha ao apagar o antigo é logada, não quebra a resposta.
-- Referência pronta: `UpdateAvatarUseCase` (`use-cases/users/update-avatar.use-case.ts`), com `deleteQuietly` para que uma falha na compensação não mascare o erro original.
-- O método do repository que troca o caminho lê o valor anterior e grava o novo **na mesma transação com `SELECT … FOR UPDATE`** e retorna `{ <registro>, previous…Path }` (ver `DrizzleUserRepository.updateAvatarPath`). Ler o anterior em uma query separada deixaria arquivos órfãos com uploads simultâneos.
-- Apagar um post (ou remover a imagem) também remove o arquivo do disco, depois da escrita no banco. O cascade de usuário → posts no Postgres não apaga arquivos; isso é aceito (órfãos), não tente resolver com trigger.
+- Referências prontas: `UpdateAvatarUseCase` (`use-cases/users/update-avatar.use-case.ts`) e `UpdatePostImageUseCase` (`use-cases/posts/update-post-image.use-case.ts`), com `deleteQuietly` para que uma falha na compensação não mascare o erro original.
+- O método do repository que troca o caminho lê o valor anterior e grava o novo **na mesma transação com `SELECT … FOR UPDATE`** e retorna `{ <registro>, previous…Path }` (ver `DrizzleUserRepository.updateAvatarPath` e `DrizzlePostRepository.updateImagePath`). Ler o anterior em uma query separada deixaria arquivos órfãos com uploads simultâneos.
+- Apagar um post também remove o arquivo do disco, depois da escrita no banco: `PostRepository.delete` devolve o `imagePath` da linha apagada via `RETURNING`, e `DeletePostUseCase` apaga o arquivo logando (sem propagar) uma falha do disco. O cascade de usuário → posts no Postgres não apaga arquivos; isso é aceito (órfãos), não tente resolver com trigger.
 
 ### Sharp (processamento)
 
 - Presets fixos no adapter, nunca vindos do request:
-  - Post: `resize({ width: 1200, withoutEnlargement: true })`.
+  - Post: no máximo 720p, sem tamanho fixo — `resize(1280, 720, { fit: 'inside', withoutEnlargement: true })` (paisagem até 1280 de largura, retrato até 720 de altura, proporção mantida, nunca amplia).
   - Avatar: `resize(200, 200, { fit: 'cover' })` — sempre exatamente 200×200 (amplia imagens menores).
 - Sempre `.rotate()` (aplica a orientação EXIF) e re-encode para **WebP** (`.webp({ quality: 80 })`). O re-encode descarta metadados (EXIF/GPS) — não chame `.withMetadata()`.
 - Use `sharp(buffer, { limitInputPixels: ... })` (proteção contra "decompression bomb") e `failOn` padrão.

@@ -2,12 +2,15 @@ import type { PostWithAuthorRecord } from '../repositories/post.repository.ts';
 import type { PostDetailRecord } from '../use-cases/posts/get-post.use-case.ts';
 import type { ListPostsOutput } from '../use-cases/posts/list-posts.use-case.ts';
 import { toReplyOutputDTO, type ReplyOutputDTO } from './reply-output.dto.ts';
+import { toUploadUrl } from './upload-url.ts';
 
 /** Formato público de um post na API (`PostSummary` do contrato): listagem, criação e edição. */
 export type PostOutputDTO = {
   id: number;
   title: string;
   content: string;
+  /** URL pública da imagem (`/uploads/posts/<uuid>.webp`) ou `null`. */
+  imageUrl: string | null;
   /** ISO 8601 */
   createdAt: string;
   author: { id: number; name: string };
@@ -36,6 +39,8 @@ export function toPostOutputDTO(post: PostWithAuthorRecord): PostOutputDTO {
     id: post.id,
     title: post.title,
     content: post.content,
+    // O caminho interno em disco não sai na API, só a URL pública.
+    imageUrl: toUploadUrl(post.imagePath),
     createdAt: post.createdAt.toISOString(),
     author: { id: post.author.id, name: post.author.name },
     likesCount: post.likesCount,
