@@ -41,7 +41,9 @@ npm install
 cp .env.example .env
 
 # 3. Subir os containers: bancos (aplicação na porta 6000, testes na 6001)
-#    e Mailpit (dev: SMTP 1025 / caixa em http://localhost:8025; testes: SMTP 1026 / 8026)
+#    Mailpit (dev: SMTP 1025 / caixa em http://localhost:8025; testes: SMTP 1026 / 8026)
+#    Redis (porta 6379) e Bull Board (painel das filas em http://localhost:3000, login admin/admin;
+#    filas dos testes em http://localhost:3001)
 npm run db:up
 
 # 4. Aplicar as migrations no banco da aplicação
@@ -70,6 +72,8 @@ curl http://localhost:3333/api/health
 | `SMTP_PORT` | Porta do servidor SMTP (1 a 65535) | obrigatória |
 | `SMTP_FROM` | Remetente, no formato `email` ou `Nome <email>` | obrigatória |
 | `SMTP_USER` / `SMTP_PASS` | Credenciais SMTP. Opcionais, mas precisam vir juntas | — |
+| `REDIS_URL` | URL do Redis das filas (BullMQ) | obrigatória |
+| `QUEUE_PREFIX` | Prefixo das chaves das filas no Redis (o Bull Board de dev lê `bull`; o de testes, `bull-test`) | `bull` |
 
 Os valores são validados com Zod ao iniciar. Se algum for inválido, a aplicação não sobe.
 
@@ -85,7 +89,7 @@ Em desenvolvimento, o SMTP é o **Mailpit** do Docker Compose (`localhost:1025`,
 | `npm run typecheck` | Verifica os tipos sem gerar arquivos |
 | `npm test` | Roda a suíte de testes uma vez |
 | `npm run test:watch` | Roda os testes em modo watch |
-| `npm run db:up` / `db:down` | Sobe ou derruba os containers (Postgres e Mailpit, de dev e de teste) |
+| `npm run db:up` / `db:down` | Sobe ou derruba os containers (Postgres, Mailpit e Bull Board, de dev e de teste, e Redis) |
 | `npm run db:generate` | Gera uma migration a partir de `src/db/schema.ts` |
 | `npm run db:migrate` | Aplica as migrations no banco da aplicação |
 | `npm run db:studio` | Abre o Drizzle Studio |
@@ -254,10 +258,11 @@ curl -X POST http://localhost:3333/api/posts/1/replies \
 - Replies são planas: sempre respondem o post, nunca outra reply.
 - O autor do post também pode responder, e o mesmo usuário pode responder várias vezes.
 
-**E-mail de nova reply:** depois de criar a reply, a API envia um e-mail ao **autor do post**, com o assunto `New reply on "<título do post>"`, o nome de quem respondeu, o título e o texto da reply (versões texto e HTML).
+**E-mail de nova reply:** depois de criar a reply, a API coloca na fila `emails` (BullMQ + Redis) um job com os dados já prontos (destinatário, nomes, título e texto da reply). Um worker, que roda no mesmo processo da API, envia o e-mail ao **autor do post**, com o assunto `New reply on "<título do post>"`, o nome de quem respondeu, o título e o texto da reply (versões texto e HTML).
 
 - Não é enviado quando o próprio autor responde o post dele.
-- Uma falha no envio **não afeta a resposta**: a reply continua criada (201) e o erro só vai para o log, sem o destinatário nem o conteúdo.
+- A resposta não espera o envio. Se a fila estiver fora do ar (o enfileiramento tem prazo de 2 s), a reply continua criada (201) e o erro só vai para o log, sem o destinatário nem o conteúdo.
+- Se o SMTP falhar, o job é tentado até 3 vezes (espera exponencial a partir de 5 s). Os jobs concluídos ficam 24 h no Redis, e os falhos, 7 dias. Em dev, dá para acompanhá-los no Bull Board (http://localhost:3000).
 - Todo texto vindo de usuários (nomes, título e reply) é escapado no HTML. O e-mail de quem respondeu nunca aparece na mensagem.
 - Em desenvolvimento, os e-mails ficam em **http://localhost:8025** (Mailpit).
 
@@ -376,7 +381,7 @@ Cada camada tem uma responsabilidade só (SRP):
 - **Controller:** cuida do HTTP. Valida `body`, `params` e `query` com Zod, chama o use case e **delega a montagem do corpo da resposta** aos mappers de DTO de saída.
 - **DTOs de saída:** descrevem o JSON da API em `src/dtos/`: `PostOutputDTO`, `PostDetailOutputDTO` e `PostListOutputDTO` (posts), `LikesOutputDTO` (likes), `ReplyOutputDTO` (replies), `AuthOutputDTO` (cadastro e login) e `MeOutputDTO` (usuário logado). Os mappers (`toPostOutputDTO`, `toPostDetailOutputDTO`, `toPostListOutputDTO`, `toLikesOutputDTO`, `toReplyOutputDTO`, `toAuthOutputDTO`, `toMeOutputDTO`) são funções puras que escolhem os campos expostos (o hash da senha nunca sai), convertem datas para ISO e montam o envelope `{ data, meta }` da listagem.
 - **Use cases:** cada operação é uma classe própria que implementa a interface `UseCase<Input, Output>`, com um único método `execute`. Posts: `ListPostsUseCase`, `GetPostUseCase`, `CreatePostUseCase`, `UpdatePostUseCase`, `UpdatePostImageUseCase` e `DeletePostUseCase`. Likes: `LikePostUseCase` e `UnlikePostUseCase`. Replies: `CreateReplyUseCase` e `DeleteReplyUseCase`. Auth: `RegisterUseCase`, `LoginUseCase` e `FindUserByTokenUseCase`. Usuário: `GetMeUseCase` e `UpdateAvatarUseCase`. Concentram as regras de negócio (posse do post e da reply, paginação, cadastro e login, erros 401/403/404/409), devolvem dados de domínio e não conhecem Express, ORM nem bibliotecas de criptografia.
-- **Repository:** é a interface de persistência que os use cases usam (`PostRepository`, `LikeRepository`, `ReplyRepository`, `UserRepository`).
+- **Repository:** é a interface de persistência que os use cases usam (`PostRepository`, `LikeRepository`, `ReplyRepository`, `UserRepository`). Inclui `EmailJobRepository`, que cria os jobs de e-mail; o adapter `BullMqEmailJobRepository` grava na fila do BullMQ.
 - **Adapter Drizzle:** implementa o repository com Drizzle (`DrizzlePostRepository`, `DrizzleLikeRepository`, `DrizzleReplyRepository`, `DrizzleUserRepository`). Detalhes do banco ficam só aqui, como os códigos de erro do Postgres `23505` (unicidade, e-mail duplicado) e `23503` (chave estrangeira, like ou reply em post inexistente) e o `ON CONFLICT DO NOTHING` que torna o like idempotente.
 - **Utils:** interfaces de funções auxiliares usadas pelos use cases (`PasswordHasher`, `TokenGenerator`, `ImageProcessor`, `FileStorage`, `Mailer`) e seus adapters (`BcryptPasswordHasher`, `CryptoTokenGenerator`, `SharpImageProcessor`, `DiskFileStorage`, `NodemailerMailer`). O conteúdo dos e-mails é montado por funções puras em `src/emails/`. O custo do bcrypt e o hash fictício que protege o login contra timing attack ficam no adapter, assim como as dimensões das imagens e a geração do nome do arquivo (UUID).
 - **Upload:** o Multer só aparece em `middlewares/upload.ts`, guarda o arquivo em memória e traduz seus erros para `AppError`. O controller entrega ao use case apenas o `Buffer`; o use case processa a imagem, grava no disco e só então atualiza o banco (apagando o arquivo novo se a escrita no banco falhar).
@@ -419,6 +424,7 @@ src/
 ├── repositories/        # interfaces de persistência + adapters Drizzle
 ├── utils/               # interfaces de hash, token, imagem, arquivos e e-mail + adapters
 ├── emails/              # montagem do conteúdo dos e-mails (funções puras)
+├── queues/              # filas BullMQ: conexão Redis, fila e worker de e-mails
 ├── schemas/             # schemas Zod de entrada
 ├── routes/
 ├── middlewares/         # autenticação, upload (Multer) e tratamento de erros
@@ -442,6 +448,8 @@ npm test
 ```
 
 Os e-mails dos testes vão para um **Mailpit separado** (`mailpit_test`, SMTP na porta 1026 e API HTTP na 8026), consultado pela API dele em `tests/helpers/mailpit.ts`. Assim a suíte nunca mexe nos e-mails do Mailpit de desenvolvimento.
+
+O e-mail sai pela fila também nos testes. Eles usam o mesmo Redis de dev, mas com o prefixo `bull-test` (`QUEUE_PREFIX` do `.env.test`), então os jobs de teste não são consumidos pela API de dev e aparecem num **Bull Board separado** (`bullboard_test`, http://localhost:3001, mesmo login), não no de dev. A fila de teste é limpa no início da execução, e o worker é iniciado só em `tests/integration/replies/create.spec.ts`. Como esse spec também esvazia a fila antes de cada teste, ao fim da execução o painel mostra só os jobs que sobraram: os do último teste desse spec e os de `tests/integration/bullmq-email-job.repository.spec.ts` (que ficam em `waiting`, porque esse spec não inicia worker).
 
 A caixa de teste é limpa **uma vez, no início de cada execução**, e não entre os testes. Depois de `npm test`, os e-mails enviados pela suíte ficam visíveis em **http://localhost:8026** até a próxima execução. Cada teste só enxerga as mensagens que chegaram depois do seu `beforeEach` (`markMailbox()`), então os testes continuam isolados.
 

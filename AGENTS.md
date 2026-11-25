@@ -13,7 +13,7 @@ API REST de blog em **TypeScript + Express 5 + Drizzle ORM + PostgreSQL 17**.
 - Likes: usuário autenticado curte/descurte posts; a contagem é pública.
 - Replies: usuário autenticado responde posts e só o autor da reply a apaga; as replies são públicas e aparecem no post individual.
 - Imagens: foto do post e avatar do usuário, enviados via `multipart/form-data`, processados com **Sharp** e gravados em disco; o banco guarda só o caminho relativo. Ver [Uploads de imagem](#uploads-de-imagem-foto-do-post-e-avatar).
-- Notificação por e-mail: o autor do post recebe um e-mail quando alguém responde ao post dele. Envio via **Nodemailer**; em dev/teste o SMTP é o **Mailpit**. Ver [E-mail](#e-mail-notificação-de-nova-reply).
+- Notificação por e-mail: o autor do post recebe um e-mail quando alguém responde ao post dele. O use case só cria um job na fila **BullMQ** (Redis); o worker envia via **Nodemailer**; em dev/teste o SMTP é o **Mailpit**. Ver [E-mail](#e-mail-notificação-de-nova-reply).
 - Escopo fechado em **auth + posts + likes + replies + imagens + e-mail de nova reply** (sem logout, perfil além de `GET /me` e do avatar, troca de senha, admin, thread de replies, like em reply, paginação ou edição de replies, nem outros e-mails — ver `docs/api.md`).
 
 Idioma: código (identificadores, mensagens de erro da API) e mensagens de commit em **inglês**; comentários e docs em **português**.
@@ -22,7 +22,7 @@ Idioma: código (identificadores, mensagens de erro da API) e mensagens de commi
 
 | Comando | Uso |
 |---|---|
-| `npm run db:up` | Sobe os containers via Docker: Postgres `db` (porta **6000**) e `db_test` (**6001**); Mailpit `mailpit` (SMTP **1025**, UI http://localhost:8025) e `mailpit_test` (SMTP **1026**, UI/API **8026**) |
+| `npm run db:up` | Sobe os containers via Docker: Postgres `db` (porta **6000**) e `db_test` (**6001**); Mailpit `mailpit` (SMTP **1025**, UI http://localhost:8025) e `mailpit_test` (SMTP **1026**, UI/API **8026**); Redis `redis` (porta **6379**, com volume e AOF); Bull Board `bullboard` (painel das filas de dev, prefixo `bull`, http://localhost:3000, basic auth `BULL_BOARD_USER`/`BULL_BOARD_PASSWORD`, padrão `admin`/`admin`) e `bullboard_test` (prefixo `bull-test`, http://localhost:3001, mesmo login) |
 | `npm run dev` | API em watch (tsx), lê `.env`, porta padrão 3333, prefixo `/api` |
 | `npm test` | Vitest (precisa do `db_test` rodando; migrations aplicadas automaticamente) |
 | `npm run typecheck` | `tsc` sem emitir — rode após qualquer mudança |
@@ -46,13 +46,14 @@ Route → [ensureAuthenticated] → [upload (Multer)] → Controller → Use Cas
 |---|---|
 | `src/server.ts` | Sobe o servidor e faz shutdown gracioso (fecha o `pool`) |
 | `src/app.ts` | `createApp()` — monta Express, rotas em `/api`, 404 e error handler. Usado pelos testes |
-| `src/env.ts` | Valida `NODE_ENV`, `PORT`, `DATABASE_URL`, `UPLOAD_DIR` e as variáveis `SMTP_*` com Zod; a app não sobe se inválido |
+| `src/env.ts` | Valida `NODE_ENV`, `PORT`, `DATABASE_URL`, `UPLOAD_DIR`, as variáveis `SMTP_*` e `QUEUE_PREFIX` com Zod; a app não sobe se inválido (`REDIS_URL` é checada em `src/queues/connection.ts`) |
 | `src/routes/` | Só mapeia método/caminho → middleware/controller |
 | `src/controllers/` | HTTP: valida `body/params/query` com Zod, chama o use case, define status e responde via mapper de DTO. **Também é o ponto de composição (DI manual)** |
 | `src/schemas/` | Schemas Zod de entrada + tipos inferidos (`RegisterInput`, `CreatePostInput`, `CreateReplyBody`…); `common.schema.ts` tem `positiveIntFromString` para ids/páginas da URL |
 | `src/use-cases/` | Regras de negócio. Uma classe por operação implementando `UseCase<Input, Output>` (`execute`). Lançam `AppError` |
-| `src/repositories/` | Interfaces (`PostRepository`, `LikeRepository`, `ReplyRepository`, `UserRepository`) + adapters `Drizzle*Repository`; `pg-error.ts` detecta códigos/constraints do Postgres |
+| `src/repositories/` | Interfaces (`PostRepository`, `LikeRepository`, `ReplyRepository`, `UserRepository`, `EmailJobRepository`) + adapters `Drizzle*Repository` e `BullMqEmailJobRepository`; `pg-error.ts` detecta códigos/constraints do Postgres |
 | `src/utils/` | Interfaces `PasswordHasher`, `TokenGenerator`, `ImageProcessor`, `FileStorage`, `Mailer` + adapters bcrypt / `node:crypto` / Sharp / disco (`node:fs/promises`) / Nodemailer |
+| `src/queues/` | BullMQ: `connection.ts` (ioredis compartilhado), `emails/` (`names.ts` sem efeitos colaterais, `queue.ts`, `processor.ts` puro sobre `Mailer`, `worker.ts` = composição do worker) e `pings/` (fila de exemplo). **Único lugar, junto com `BullMqEmailJobRepository`, que importa `bullmq`** |
 | `src/emails/` | Conteúdo dos e-mails em funções puras (`buildNewReplyEmail`) + `escapeHtml` |
 | `src/dtos/` | Tipos de saída da API + mappers puros (`toPostOutputDTO`, `toPostDetailOutputDTO`, `toPostListOutputDTO`, `toLikesOutputDTO`, `toReplyOutputDTO`, `toAuthOutputDTO`) |
 | `src/middlewares/` | `ensureAuthenticated` (+ `getAuthenticatedUser(req)`), `optionalAuthentication` (+ `getOptionalUser(req)`), `errorHandler`/`notFoundHandler` e `upload.ts` (instâncias do Multer — **único lugar do projeto que importa `multer`**) |
@@ -171,20 +172,23 @@ Princípio: **Multer só na borda; o use case recebe um `Buffer`; Sharp processa
 
 ## E-mail (notificação de nova reply)
 
-Implementado: `Mailer` + `NodemailerMailer` (`src/utils/`), `buildNewReplyEmail` + `escapeHtml` (`src/emails/`), `PostRepository.findWithAuthorContact` e o envio em `CreateReplyUseCase`.
+Implementado: `Mailer` + `NodemailerMailer` (`src/utils/`), `buildNewReplyEmail` + `escapeHtml` (`src/emails/`), `PostRepository.findWithAuthorContact`, `EmailJobRepository` + `BullMqEmailJobRepository` (`src/repositories/`) e a fila/worker em `src/queues/emails/`.
 
 - Infra:
   - `docker-compose.yml` tem `mailpit` (dev) e `mailpit_test` (testes), imagem `axllent/mailpit` com tag fixa, healthcheck `mailpit readyz` (necessário para o `docker compose up --wait` do `db:up`) e `MP_SMTP_AUTH_ACCEPT_ANY`/`MP_SMTP_AUTH_ALLOW_INSECURE` para aceitar SMTP com ou sem credenciais. Sem volume: os e-mails são descartáveis.
   - `env.ts`: `SMTP_HOST` e `SMTP_PORT` (1..65535) obrigatórios; `SMTP_FROM` obrigatório, como `email` ou `Nome <email>`; `SMTP_USER`/`SMTP_PASS` opcionais (vazio = ausente), mas **em par**. O schema é exportado (`envSchema`) e coberto por `tests/unit/env.spec.ts`.
   - `MAILPIT_API_URL` existe só no `.env.test` e é usada só pelo helper de testes (a app nunca fala com a API do Mailpit, só com o SMTP).
 - Interface `Mailer` (`src/utils/mailer.ts`): `send({ to, subject, text, html }): Promise<void>`. Adapter `NodemailerMailer` cria **um** transporter no ponto de composição a partir de `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` (+ `SMTP_USER`/`SMTP_PASS` opcionais). Nenhum outro arquivo importa `nodemailer`.
-- `CreateReplyUseCase` recebe `Mailer` pelo construtor. Fluxo:
-  1. Persistir a reply (como hoje).
-  2. Buscar destinatário com um método de repository que retorna `{ email, name }` do autor do post (o e-mail é usado só aqui; continua **nunca** saindo nos DTOs).
-  3. **Não enviar se o autor da reply for o próprio dono do post.**
-  4. Enviar com `await` dentro de `try/catch`: **falha de e-mail nunca falha a requisição** (a reply já foi criada → 201). Logar o erro sem destinatário nem conteúdo.
-  - O `try/catch` cobre também a busca do destinatário (passos 2–4). O log leva só `postId`, `replyId` e o `code`/`name` do erro, nunca `error.message`: mensagens de SMTP costumam citar o endereço.
-  - Como o envio segura a resposta, o transporter tem timeouts curtos (conexão/saudação 5 s, socket 10 s) no lugar dos ~2 min padrão do Nodemailer.
+- `CreateReplyUseCase` recebe `EmailJobRepository` pelo construtor e **nunca** importa BullMQ nem `Mailer`. Fluxo:
+  1. Persistir a reply.
+  2. Buscar destinatário com `PostRepository.findWithAuthorContact` (`{ email, name }` do autor do post; o e-mail é usado só aqui e **nunca** sai nos DTOs).
+  3. **Não criar job se o autor da reply for o próprio dono do post.**
+  4. `createNewReplyEmailJob(payload)` dentro de `try/catch`: **falha da fila nunca falha a requisição** (a reply já foi criada → 201). O log leva só `postId`, `replyId` e o `code`/`name` do erro (`errorCode` de `src/errors/error-code.ts`), nunca `error.message`.
+  - **Payload com os dados prontos**, não ids: `NewReplyEmailJob = { to, recipientName, replierName, postTitle, replyContent }`. O worker não vai ao banco.
+- `BullMqEmailJobRepository.createNewReplyEmailJob` faz `queue.add('new-reply', payload)` com **prazo de 2 s** (rejeita com `ETIMEDOUT`): a conexão usa `maxRetriesPerRequest: null` (exigido pelo Worker), e com o Redis fora o `add` esperaria para sempre.
+- Fila `emails` (`src/queues/emails/queue.ts`): `prefix: env.QUEUE_PREFIX`, `attempts: 3` com backoff exponencial de 5 s, `removeOnComplete` (24 h / 1000 jobs) e `removeOnFail` (7 dias) — os jobs carregam e-mail e texto de usuários.
+- Worker (`startEmailWorker()` em `worker.ts`) roda **no mesmo processo da API**, iniciado em `server.ts` e fechado no shutdown (`worker.close()` → `emailsQueue.close()` → `pool.end()`). Ele compõe o `NodemailerMailer` e usa `createEmailProcessor(mailer)` (`processor.ts`), que monta o e-mail com `buildNewReplyEmail` e **relança** erros para o BullMQ tentar de novo. Listeners `failed`/`error` logam só id, nome, tentativa e código do erro.
+- O transporter tem timeouts curtos (conexão/saudação 5 s, socket 10 s) no lugar dos ~2 min padrão do Nodemailer, para um SMTP fora do ar não prender um slot do worker.
 - Conteúdo: assunto e corpo em inglês (como as mensagens da API), com título do post, nome de quem respondeu e trecho da reply. No `html`, **escapar** todo texto vindo do usuário (título, nome, conteúdo); manter também a versão `text`. Montar o e-mail numa função pura (ex.: `src/emails/new-reply.email.ts`) testável isoladamente.
 - Não colocar tokens, hashes ou e-mails de terceiros no corpo nem nos logs.
 
@@ -195,13 +199,14 @@ Implementado: `Mailer` + `NodemailerMailer` (`src/utils/`), `buildNewReplyEmail`
 - `fileParallelism: false` — arquivos rodam em série porque compartilham o banco.
 - Padrão dos specs de integração: `const app = createApp()`, `beforeEach(resetDatabase)` (TRUNCATE com `RESTART IDENTITY`), `afterAll(() => pool.end())`. Helpers em `tests/helpers/api.ts` (`registerUser`, `createPost`, `likePost`, `createReply`, `defaultUser`).
 - **Uploads nos testes**: `.env.test` aponta `UPLOAD_DIR` para um diretório próprio (ex.: `tmp/uploads-test`), limpo no `beforeEach`. Helpers em `tests/helpers/uploads.ts` (`resetUploads`, `listUploads`, `makeImage`, `readUploadMetadata`): imagens de teste são geradas em memória com Sharp e enviadas com `.attach('image', buffer, 'photo.png')` do Supertest. **Nunca abra arquivo gravado com `sharp(caminho)` nos testes**: o cache do libvips mantém o arquivo aberto e, no Windows, o `rm` seguinte falha com `EBUSY` — leia para buffer (`readUploadMetadata`). Cubra: formato inválido (texto renomeado para `.png`) → 400, arquivo grande demais → 400, saída é WebP com as dimensões do preset, arquivo antigo removido na troca, arquivo removido ao apagar o post, nada sobra no disco quando o banco falha/post não existe.
-- **E-mail nos testes**: contra o **Mailpit real** (`mailpit_test`, SMTP 1026, API HTTP 8026), sem mock do Nodemailer nos testes de integração. A caixa é limpa **uma vez por execução** (`clearMailbox()` no `tests/global-setup.ts`), para os e-mails da última execução ficarem visíveis na UI (http://localhost:8026); **não** chame `clearMailbox()` nos specs. O isolamento entre testes é por marca: `markMailbox()` no `beforeEach` guarda a mensagem mais recente, e `listMessages()`/`waitForMessage({ to })` só enxergam o que chegou depois dela. Helper `tests/helpers/mailpit.ts`: `waitForMessage({ to })` (polling curto, erro claro se nada chegar), `getMessage(id)` (`Text`/`HTML` completos) e `listMessages()` — para afirmar que **nada** foi enviado, espere um pouco e cheque `listMessages()` vazio. `tests/integration/mailpit.spec.ts` valida a infra (SMTP do `.env.test` respondendo e o helper). Cubra: e-mail chega ao dono do post, não é enviado em auto-reply, HTML escapado, e a reply ainda retorna 201 se o SMTP estiver fora (use um `Mailer` que falha injetado num teste unitário do use case).
+- **E-mail nos testes**: contra o **Mailpit real** (`mailpit_test`, SMTP 1026, API HTTP 8026), sem mock do Nodemailer nos testes de integração. A caixa é limpa **uma vez por execução** (`clearMailbox()` no `tests/global-setup.ts`), para os e-mails da última execução ficarem visíveis na UI (http://localhost:8026); **não** chame `clearMailbox()` nos specs. O isolamento entre testes é por marca: `markMailbox()` no `beforeEach` guarda a mensagem mais recente, e `listMessages()`/`waitForMessage({ to })` só enxergam o que chegou depois dela. Helper `tests/helpers/mailpit.ts`: `waitForMessage({ to })` (polling curto, erro claro se nada chegar), `getMessage(id)` (`Text`/`HTML` completos) e `listMessages()` — para afirmar que **nada** foi enviado, espere um pouco e cheque `listMessages()` vazio. `tests/integration/mailpit.spec.ts` valida a infra (SMTP do `.env.test` respondendo e o helper). Cubra: e-mail chega ao dono do post, não é enviado em auto-reply, HTML escapado, e a reply ainda retorna 201 se a fila estiver fora (use um `EmailJobRepository` que falha injetado num teste unitário do use case).
+- **Filas nos testes**: mesmo Redis de dev, com `QUEUE_PREFIX=bull-test` no `.env.test`, visíveis no `bullboard_test` (http://localhost:3001). É um painel separado porque um painel só não exibe duas filas `emails` em prefixos diferentes. O `global-setup` limpa a fila de teste no início da execução; `tests/setup.ts` (`setupFiles`) fecha a fila e a conexão Redis ao fim de cada arquivo. Só `tests/integration/replies/create.spec.ts` inicia o worker (`beforeAll`); no `beforeEach` ele chama `waitForEmailQueueIdle()` e `clearEmailQueue()` antes do `markMailbox()`, para um e-mail atrasado não vazar para o teste seguinte. Helpers em `tests/helpers/queue.ts` (`clearEmailQueue`, `emailQueueJobCount`, `waitForEmailQueueIdle`). Para afirmar que nada foi enfileirado, cheque `emailQueueJobCount()` igual a 0.
 - Testes descrevem comportamento em inglês. O projeto foi construído com **TDD**: ao adicionar/alterar comportamento, escreva ou atualize o teste de integração correspondente.
 - Antes de concluir uma tarefa: `npm run typecheck` e `npm test` (com `npm run db:up` se os containers não estiverem rodando).
 
 ## Arquivos e contexto extra
 
-- `.env` (gitignored) para dev; `.env.example` é o modelo; `.env.test` **é commitado** de propósito. Ao adicionar variáveis ao `env.ts`, atualize os três (o SMTP de dev aponta para `mailpit` 1025, o de teste para `mailpit_test` 1026).
+- `.env` (gitignored) para dev; `.env.example` é o modelo; `.env.test` **é commitado** de propósito. Ao adicionar variáveis ao `env.ts`, atualize os três (o SMTP de dev aponta para `mailpit` 1025, o de teste para `mailpit_test` 1026; `QUEUE_PREFIX` é `bull` em dev e `bull-test` nos testes).
 - `uploads/` e `tmp/` devem estar no `.gitignore`.
 - `docs/` é **gitignored** e contém material de planejamento local: `project-prd.md` (requisitos), `braindump.md` (ideia original), `api.md` (especificação da API). Consulte se existir, mas não dependa dele.
 - `dist/` é saída de build (gitignored).
