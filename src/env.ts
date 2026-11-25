@@ -37,6 +37,9 @@ export const envSchema = z
     // Credenciais opcionais (o Mailpit não exige), mas sempre em par.
     SMTP_USER: optionalString,
     SMTP_PASS: optionalString,
+    // Prefixo das chaves das filas BullMQ no Redis. `bull` é o que o Bull Board lê; os testes
+    // usam outro para não misturar jobs com os de dev no mesmo Redis.
+    QUEUE_PREFIX: z.string().trim().min(1).default('bull'),
   })
   .refine((env) => (env.SMTP_USER === undefined) === (env.SMTP_PASS === undefined), {
     message: 'SMTP_USER and SMTP_PASS must be set together',

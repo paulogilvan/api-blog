@@ -68,6 +68,56 @@ services:
       - "8026:8025" # UI web + API HTTP
     healthcheck: *mailpit_healthcheck
 
+  redis:
+    image: redis:8-alpine
+    container_name: api-blog-redis
+    restart: unless-stopped
+    # AOF ligado para os dados sobreviverem a um restart do container.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Painel das filas BullMQ/Bull guardadas no Redis acima: http://localhost:3000
+  # Imagem oficial (CLI standalone): https://felixmosh.github.io/bull-board/guide/docker
+  bullboard:
+    image: ghcr.io/felixmosh/bull-board:9.14.0
+    container_name: api-blog-bullboard
+    restart: unless-stopped
+    # Prefixo das chaves das filas: padrão "bull" (QUEUE_PREFIX de dev).
+    command: ["--redis", "redis://redis:6379"]
+    environment: &bullboard_env
+      # Dentro do container o painel escuta em 0.0.0.0, então a doc exige basic auth.
+      # Valores vêm do .env (ver .env.example); os padrões servem só para dev local.
+      BULL_BOARD_USER: ${BULL_BOARD_USER:-admin}
+      BULL_BOARD_PASSWORD: ${BULL_BOARD_PASSWORD:-admin}
+    ports:
+      # Publicado só no loopback do host: o basic auth trafega em HTTP puro.
+      - "127.0.0.1:3000:3000"
+    depends_on: &bullboard_depends_on
+      redis:
+        condition: service_healthy
+
+  # Painel das filas dos testes (QUEUE_PREFIX=bull-test do .env.test): http://localhost:3001
+  # Separado do de dev porque o painel não exibe duas filas de mesmo nome ("emails") em
+  # prefixos diferentes: ele mostraria só uma delas.
+  bullboard_test:
+    image: ghcr.io/felixmosh/bull-board:9.14.0
+    container_name: api-blog-bullboard-test
+    restart: unless-stopped
+    command: ["--redis", "redis://redis:6379", "--prefix", "bull-test"]
+    environment: *bullboard_env
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on: *bullboard_depends_on
+
 volumes:
   db_data:
   db_test_data:
+  redis_data:
