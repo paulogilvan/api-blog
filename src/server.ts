@@ -7,8 +7,8 @@ import { startPingWorker } from './queues/pings/worker.ts';
 
 const app = createApp();
 
-startPingWorker()
-// O worker de e-mail roda no mesmo processo da API.
+// Os workers rodam no mesmo processo da API.
+const pingWorker = startPingWorker();
 const emailWorker = startEmailWorker();
 
 const server = app.listen(env.PORT, () => {
@@ -19,7 +19,7 @@ function shutdown(signal: string) {
   console.log(`${signal} received, shutting down...`);
   server.close(async () => {
     // `close` espera os jobs em andamento terminarem antes de soltar o worker.
-    await emailWorker.close();
+    await Promise.all([pingWorker.close(), emailWorker.close()]);
     await emailsQueue.close();
     await pool.end();
     process.exit(0);

@@ -1,5 +1,5 @@
-import type { Job } from "bullmq";
+import type { Job } from 'bullmq';
 
-export async function processPing(job: Job) {
-    console.log('pong', job.id, job.data)
+export async function processPing(job: Pick<Job, 'id' | 'data'>) {
+  console.log('pong', job.id, job.data);
 }
