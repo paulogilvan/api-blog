@@ -1,14 +1,23 @@
 import { eq } from 'drizzle-orm';
 import request from 'supertest';
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../../src/app.ts';
 import { db, pool } from '../../../src/db/index.ts';
 import { replies } from '../../../src/db/schema.ts';
+import { emailsQueue } from '../../../src/queues/emails/queue.ts';
+import { startEmailWorker } from '../../../src/queues/emails/worker.ts';
 import { createPost, registerUser } from '../../helpers/api.ts';
 import { resetDatabase } from '../../helpers/database.ts';
 import { getMessage, listMessages, markMailbox, waitForMessage } from '../../helpers/mailpit.ts';
+import {
+  clearEmailQueue,
+  emailQueueJobCount,
+  waitForEmailQueueIdle,
+} from '../../helpers/queue.ts';
 
 const app = createApp();
+// O e-mail sai pela fila: o worker roda aqui, como no processo da API (`server.ts`).
+let emailWorker: ReturnType<typeof startEmailWorker>;
 
 const validReply = { content: 'Great post!' };
 
@@ -23,12 +32,23 @@ async function storedReplies() {
 }
 
 describe('POST /api/posts/:id/replies', () => {
+  beforeAll(async () => {
+    // Jobs criados por specs anteriores (que não rodam worker) não devem virar e-mails aqui.
+    await clearEmailQueue();
+    emailWorker = startEmailWorker();
+  });
+
   beforeEach(async () => {
     await resetDatabase();
+    // Os e-mails do teste anterior precisam sair antes da marca do Mailpit deste teste.
+    await waitForEmailQueueIdle();
+    // Fila vazia a cada teste: `emailQueueJobCount()` conta só os jobs deste teste.
+    await clearEmailQueue();
     await markMailbox();
   });
 
   afterAll(async () => {
+    await emailWorker.close();
     await pool.end();
   });
 
@@ -162,9 +182,30 @@ describe('POST /api/posts/:id/replies', () => {
       const response = await createReply(author.token, post.id, validReply);
 
       expect(response.status).toBe(201);
-      // O envio é aguardado antes da resposta; a pausa só cobre a gravação no Mailpit.
+      // Nenhum job deve ter sido criado; a pausa cobre um envio que, por engano, ocorresse.
+      expect(await emailQueueJobCount()).toBe(0);
       await new Promise((resolve) => setTimeout(resolve, 200));
       expect(await listMessages()).toEqual([]);
+    });
+
+    it('responds before the e-mail is sent (delivery happens in the queue)', async () => {
+      const author = await registerUser(app);
+      const replier = await registerUser(app, { email: 'jane@example.com' });
+      const post = await createPost(app, author.token);
+      // Fila pausada (nenhum worker consome): a resposta não pode depender do envio.
+      await emailsQueue.pause();
+
+      try {
+        const response = await createReply(replier.token, post.id, validReply);
+
+        expect(response.status).toBe(201);
+        expect(await emailQueueJobCount()).toBe(1);
+        expect(await listMessages()).toEqual([]);
+      } finally {
+        await emailsQueue.resume();
+      }
+
+      await waitForMessage({ to: author.user.email });
     });
 
     it('sends one e-mail per reply', async () => {
@@ -176,6 +217,8 @@ describe('POST /api/posts/:id/replies', () => {
       await createReply(replier.token, post.id, { content: 'Second' });
 
       await waitForMessage({ to: author.user.email });
+      // O worker envia em paralelo: espera os dois jobs terminarem antes de contar.
+      await waitForEmailQueueIdle();
       const messages = await listMessages();
       expect(messages).toHaveLength(2);
       expect(messages.every((m) => m.To[0].Address === author.user.email)).toBe(true);
@@ -223,6 +266,7 @@ describe('POST /api/posts/:id/replies', () => {
       await createReply(replier.token, post.id, { content: '' });
       await createReply(replier.token, 999, validReply);
 
+      expect(await emailQueueJobCount()).toBe(0);
       await new Promise((resolve) => setTimeout(resolve, 200));
       expect(await listMessages()).toEqual([]);
     });

@@ -23,8 +23,8 @@ export class NodemailerMailer implements Mailer {
       // servidor oferecer. O Mailpit de dev/teste não oferece, e o envio segue sem TLS.
       secure: port === 465,
       auth: user && pass ? { user, pass } : undefined,
-      // O envio é aguardado dentro da requisição: um SMTP fora do ar não pode segurar a
-      // resposta pelos ~2 min padrão do Nodemailer.
+      // O envio roda no worker da fila: um SMTP fora do ar não pode prender um slot do worker
+      // pelos ~2 min padrão do Nodemailer (o job falha rápido e o BullMQ tenta de novo depois).
       connectionTimeout: 5_000,
       greetingTimeout: 5_000,
       socketTimeout: 10_000,

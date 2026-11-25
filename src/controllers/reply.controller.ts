@@ -1,8 +1,10 @@
 import type { RequestHandler } from 'express';
 import { toReplyOutputDTO } from '../dtos/reply-output.dto.ts';
-import { env } from '../env.ts';
 import { getAuthenticatedUser } from '../middlewares/ensure-authenticated.ts';
+import { emailsQueue } from '../queues/emails/queue.ts';
+import { BullMqEmailJobRepository } from '../repositories/bullmq-email-job.repository.ts';
 import { DrizzlePostRepository } from '../repositories/drizzle-post.repository.ts';
+import type { EmailJobRepository } from '../repositories/email-job.repository.ts';
 import { DrizzleReplyRepository } from '../repositories/drizzle-reply.repository.ts';
 import type { PostRepository } from '../repositories/post.repository.ts';
 import type {
@@ -23,25 +25,17 @@ import {
   type DeleteReplyInput,
 } from '../use-cases/replies/delete-reply.use-case.ts';
 import type { UseCase } from '../use-cases/use-case.ts';
-import type { Mailer } from '../utils/mailer.ts';
-import { NodemailerMailer } from '../utils/nodemailer-mailer.ts';
 
 // Composição: as implementações concretas são ligadas uma única vez, fora dos handlers.
 const replyRepository: ReplyRepository = new DrizzleReplyRepository();
 const postRepository: PostRepository = new DrizzlePostRepository();
-// Um único transporter SMTP para a aplicação inteira.
-const mailer: Mailer = new NodemailerMailer({
-  host: env.SMTP_HOST,
-  port: env.SMTP_PORT,
-  from: env.SMTP_FROM,
-  user: env.SMTP_USER,
-  pass: env.SMTP_PASS,
-});
+// O e-mail de nova reply vai para a fila; quem envia é o worker (`src/queues/emails/worker.ts`).
+const emailJobRepository: EmailJobRepository = new BullMqEmailJobRepository(emailsQueue);
 
 const createReply: UseCase<CreateReplyInput, ReplyWithAuthorRecord> = new CreateReplyUseCase(
   replyRepository,
   postRepository,
-  mailer,
+  emailJobRepository,
 );
 const deleteReply: UseCase<DeleteReplyInput, void> = new DeleteReplyUseCase(replyRepository);
 
