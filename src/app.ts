@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import { UPLOADS_PUBLIC_PATH } from './dtos/upload-url.ts';
 import { env } from './env.ts';
 import { errorHandler, notFoundHandler } from './middlewares/error-handler.ts';
@@ -7,6 +8,7 @@ import { routes } from './routes/index.ts';
 export function createApp() {
   const app = express();
 
+  app.use(cors());
   app.disable('x-powered-by');
   app.use(express.json());
 
